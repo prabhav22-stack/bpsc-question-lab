@@ -87,33 +87,347 @@ def inject_custom_css() -> None:
     """Inject modern, responsive CSS styling for cards, badges, and OMR palette."""
     css = """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Outfit:wght@500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    /* Global Typography & Smoothing */
+    html, body, [class*="css"], .stApp {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif !important;
+        letter-spacing: -0.02em !important;
+        font-weight: 700 !important;
+    }
+
+    code, kbd, samp, pre {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+
     .block-container {
         padding-top: 1.8rem;
-        padding-bottom: 3rem;
-        max-width: 1200px;
+        padding-bottom: 3.5rem;
+        max-width: 1250px;
     }
+
+    /* Custom Sleek Scrollbar */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.35);
+        border-radius: 999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(148, 163, 184, 0.6);
+    }
+
+    /* Breathtaking Hero Banner */
     .bpsc-hero {
-        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #1e293b 100%);
+        background: radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.22) 0%, transparent 45%),
+                    radial-gradient(circle at 90% 80%, rgba(245, 158, 11, 0.18) 0%, transparent 45%),
+                    linear-gradient(135deg, #090d16 0%, #0f172a 45%, #1e1b4b 100%);
         color: #ffffff;
-        padding: 24px 28px;
-        border-radius: 16px;
+        padding: 28px 32px;
+        border-radius: 20px;
         margin-bottom: 24px;
         border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.35);
+        box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        position: relative;
+        overflow: hidden;
     }
+
+    .bpsc-hero::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
+        pointer-events: none;
+    }
+
     .bpsc-hero-badge {
-        display: inline-block;
-        background: rgba(245, 158, 11, 0.2);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(217, 119, 6, 0.12) 100%);
         color: #fbbf24;
-        border: 1px solid rgba(245, 158, 11, 0.4);
-        padding: 4px 12px;
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        padding: 5px 14px;
         border-radius: 9999px;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 700;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.6px;
         text-transform: uppercase;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
+        box-shadow: 0 0 14px rgba(245, 158, 11, 0.18);
     }
+
+    .bpsc-hero-title {
+        color: #ffffff;
+        margin: 8px 0 6px 0;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: -0.025em;
+        background: linear-gradient(135deg, #ffffff 40%, #cbd5e1 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .bpsc-hero-desc {
+        color: #cbd5e1;
+        margin: 0;
+        font-size: 14.5px;
+        line-height: 1.55;
+        max-width: 900px;
+    }
+
+    .bpsc-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+    }
+
+    .bpsc-hero-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #e2e8f0;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    /* Glassmorphism KPI Metrics */
+    [data-testid="stMetric"] {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 16px;
+        padding: 18px 20px;
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.07);
+    }
+
+    [data-testid="stMetric"]::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #6366f1, #8b5cf6, #3b82f6);
+        opacity: 0.8;
+        transition: height 0.25s ease, opacity 0.25s ease;
+    }
+
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-3px);
+        border-color: rgba(99, 102, 241, 0.4);
+        box-shadow: 0 14px 28px -6px rgba(99, 102, 241, 0.2);
+    }
+
+    [data-testid="stMetric"]:hover::before {
+        height: 4px;
+        opacity: 1;
+    }
+
+    [data-testid="stMetricLabel"] {
+        font-size: 0.78rem !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.06em !important;
+        opacity: 0.85 !important;
+    }
+
+    [data-testid="stMetricValue"] {
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 1.85rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.025em !important;
+    }
+
+    /* Specific Accent Colors for Dashboard Metrics */
+    [data-testid="column"]:nth-child(1) [data-testid="stMetric"]::before {
+        background: linear-gradient(90deg, #3b82f6, #06b6d4);
+    }
+    [data-testid="column"]:nth-child(2) [data-testid="stMetric"]::before {
+        background: linear-gradient(90deg, #8b5cf6, #d946ef);
+    }
+    [data-testid="column"]:nth-child(3) [data-testid="stMetric"]::before {
+        background: linear-gradient(90deg, #6366f1, #3b82f6);
+    }
+    [data-testid="column"]:nth-child(4) [data-testid="stMetric"]::before {
+        background: linear-gradient(90deg, #10b981, #14b8a6);
+    }
+    [data-testid="column"]:nth-child(5) [data-testid="stMetric"]::before {
+        background: linear-gradient(90deg, #f59e0b, #f97316);
+    }
+    [data-testid="column"]:nth-child(6) [data-testid="stMetric"]::before {
+        background: linear-gradient(90deg, #f43f5e, #ec4899);
+    }
+
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .sidebar-brand-card {
+        background: radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.25) 0%, transparent 60%),
+                    linear-gradient(135deg, #090d16 0%, #1e1b4b 60%, #0f172a 100%);
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        border-radius: 18px;
+        padding: 20px 18px;
+        margin-bottom: 20px;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 0 18px rgba(245, 158, 11, 0.12);
+    }
+
+    .sidebar-brand-card .brand-sub {
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        color: #fbbf24;
+        font-weight: 800;
+    }
+
+    .sidebar-brand-card .brand-name {
+        font-family: 'Outfit', sans-serif;
+        font-size: 19px;
+        font-weight: 800;
+        margin: 4px 0 2px 0;
+        letter-spacing: -0.01em;
+        color: #ffffff;
+    }
+
+    .sidebar-brand-card .brand-ver {
+        font-size: 12px;
+        color: #94a3b8;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .sidebar-target-box {
+        background: linear-gradient(135deg, rgba(30, 58, 138, 0.22) 0%, rgba(15, 23, 42, 0.35) 100%);
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        border-left: 4px solid #3b82f6;
+        padding: 14px 16px;
+        border-radius: 12px;
+        font-size: 13px;
+        margin-top: 16px;
+        line-height: 1.45;
+    }
+
+    /* Button Upgrades */
+    button[kind="primary"] {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 12px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
+        padding: 0.55rem 1.3rem !important;
+        box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.38) !important;
+        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
+
+    button[kind="primary"]:hover {
+        transform: translateY(-2px) scale(1.008) !important;
+        box-shadow: 0 8px 24px 0 rgba(79, 70, 229, 0.55) !important;
+    }
+
+    button[kind="primary"]:active {
+        transform: translateY(0px) scale(0.99) !important;
+    }
+
+    button[kind="secondary"] {
+        border-radius: 12px !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        background: rgba(255, 255, 255, 0.03) !important;
+        font-weight: 600 !important;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
+
+    button[kind="secondary"]:hover {
+        border-color: rgba(99, 102, 241, 0.5) !important;
+        background: rgba(99, 102, 241, 0.08) !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* Modern Pill Tabs */
+    div[data-testid="stTabs"] button[role="tab"] {
+        border-radius: 12px !important;
+        padding: 10px 20px !important;
+        font-weight: 600 !important;
+        font-size: 0.92rem !important;
+        transition: all 0.2s ease !important;
+        border: 1px solid transparent !important;
+        background: transparent !important;
+    }
+
+    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(139, 92, 246, 0.16) 100%) !important;
+        color: #818cf8 !important;
+        border: 1px solid rgba(99, 102, 241, 0.4) !important;
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.12) !important;
+    }
+
+    div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+        display: none !important;
+    }
+
+    /* Expanders */
+    div[data-testid="stExpander"] {
+        border-radius: 14px !important;
+        border: 1px solid rgba(255, 255, 255, 0.09) !important;
+        background: rgba(255, 255, 255, 0.02) !important;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+        margin-bottom: 12px;
+    }
+
+    div[data-testid="stExpander"]:hover {
+        border-color: rgba(99, 102, 241, 0.35) !important;
+        box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.08) !important;
+    }
+
+    /* Options / Radio Cards in Exam & CBT Engine */
+    div[data-testid="stRadio"] > div {
+        gap: 10px;
+    }
+
+    div[data-testid="stRadio"] label {
+        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 12px;
+        padding: 12px 18px;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        cursor: pointer;
+        width: 100%;
+    }
+
+    div[data-testid="stRadio"] label:hover {
+        background: rgba(99, 102, 241, 0.08);
+        border-color: rgba(99, 102, 241, 0.4);
+        transform: translateX(3px);
+    }
+
+    /* Glowing Badges & Tags */
     .bpsc-badge {
         display: inline-flex;
         align-items: center;
@@ -124,65 +438,87 @@ def inject_custom_css() -> None:
         font-weight: 600;
         letter-spacing: 0.2px;
     }
+
     .badge-pyq {
-        background-color: #ecfdf5;
-        color: #065f46;
-        border: 1px solid #a7f3d0;
+        background-color: rgba(16, 185, 129, 0.14);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
     }
+
     .badge-ai {
-        background-color: #f5f3ff;
-        color: #5b21b6;
-        border: 1px solid #ddd6fe;
+        background-color: rgba(139, 92, 246, 0.14);
+        color: #a78bfa;
+        border: 1px solid rgba(139, 92, 246, 0.35);
+        box-shadow: 0 0 10px rgba(139, 92, 246, 0.15);
     }
+
     .badge-sample {
-        background-color: #eff6ff;
-        color: #1e40af;
-        border: 1px solid #bfdbfe;
+        background-color: rgba(59, 130, 246, 0.14);
+        color: #60a5fa;
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        box-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
     }
+
     .badge-verified {
-        background-color: #fef3c7;
-        color: #92400e;
-        border: 1px solid #fde68a;
+        background-color: rgba(245, 158, 11, 0.14);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        box-shadow: 0 0 10px rgba(245, 158, 11, 0.15);
     }
+
     .badge-difficulty-easy {
-        background-color: #f0fdf4;
-        color: #166534;
-        border: 1px solid #bbf7d0;
+        background-color: rgba(34, 197, 94, 0.14);
+        color: #4ade80;
+        border: 1px solid rgba(34, 197, 94, 0.35);
     }
+
     .badge-difficulty-medium {
-        background-color: #fffbeb;
-        color: #92400e;
-        border: 1px solid #fde68a;
+        background-color: rgba(245, 158, 11, 0.14);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
     }
+
     .badge-difficulty-hard {
-        background-color: #fef2f2;
-        color: #991b1b;
-        border: 1px solid #fecaca;
+        background-color: rgba(239, 68, 68, 0.14);
+        color: #f87171;
+        border: 1px solid rgba(239, 68, 68, 0.35);
     }
-    [data-testid="stMetric"] {
-        background: rgba(248, 250, 252, 0.85);
-        border: 1px solid rgba(226, 232, 240, 0.95);
-        border-radius: 12px;
-        padding: 14px 18px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+
+    /* Interactive CBT Exam Cockpit Card */
+    .cbt-cockpit-card {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.6) 0%, rgba(30, 27, 75, 0.4) 100%);
+        border: 1px solid rgba(99, 102, 241, 0.25);
+        border-radius: 16px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.3);
     }
-    .sidebar-brand-card {
-        background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
-        color: white;
-        padding: 16px;
-        border-radius: 14px;
-        margin-bottom: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+    .cbt-timer-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(245, 158, 11, 0.15);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 12px;
     }
-    .sidebar-target-box {
-        background: rgba(30, 58, 138, 0.07);
-        border-left: 3px solid #3b82f6;
-        padding: 12px 14px;
-        border-radius: 0 10px 10px 0;
-        font-size: 13px;
-        margin-top: 12px;
-        line-height: 1.4;
+
+    .cbt-marking-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: rgba(239, 68, 68, 0.12);
+        color: #f87171;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 12px;
     }
     </style>
     """
@@ -363,11 +699,22 @@ def show_dashboard() -> None:
     st.markdown(
         """
         <div class="bpsc-hero">
-            <span class="bpsc-hero-badge">🎯 71st / 72nd BPSC CCE Prelims Target Tracker</span>
-            <h2 style="color: white; margin: 8px 0 4px 0; font-size: 26px; font-weight: 800;">BPSC Question Lab v2.0</h2>
-            <p style="color: #cbd5e1; margin: 0; font-size: 14px;">
-                Evidence-based exam preparation with authentic 10-year PYQ benchmarks, interactive CBT OMR simulation, and metacognitive calibration.
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
+                <span class="bpsc-hero-badge">🎯 71st / 72nd BPSC CCE Prelims Target Tracker</span>
+                <span style="font-size: 11px; color: #94a3b8; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;">
+                    Target: Sept 2025 · 150 MCQs · 120 Mins · -0.33 Marking
+                </span>
+            </div>
+            <h2 class="bpsc-hero-title">BPSC Question Lab v2.0</h2>
+            <p class="bpsc-hero-desc">
+                Adaptive, evidence-based preparation platform with authentic 10-year PYQ benchmarks, interactive CBT OMR examination simulation, and metacognitive confidence calibration.
             </p>
+            <div class="bpsc-hero-chips">
+                <span class="bpsc-hero-chip">🏛️ Authentic 10-Yr BPSC PYQs</span>
+                <span class="bpsc-hero-chip">🎛️ Dual-Mode CBT & OMR Simulation</span>
+                <span class="bpsc-hero-chip">🧠 Metacognitive Calibration</span>
+                <span class="bpsc-hero-chip">⚡ Gemini AI Grounded Reasoning</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1268,9 +1615,12 @@ def show_practice() -> None:
         if accuracy >= 70:
             st.markdown(
                 """
-                <div style="background: linear-gradient(135deg, #065f46 0%, #047857 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(6, 95, 70, 0.2);">
-                    <h3 style="color: white; margin: 0 0 4px 0;">🎉 Outstanding Performance!</h3>
-                    <p style="margin: 0; color: #d1fae5; font-size: 14px;">Strong conceptual precision. Review distractor traps and calibration insights below.</p>
+                <div style="background: radial-gradient(circle at 10% 20%, rgba(16, 185, 129, 0.25) 0%, transparent 60%), linear-gradient(135deg, #064e3b 0%, #047857 60%, #022c22 100%); color: white; padding: 22px 28px; border-radius: 18px; margin-bottom: 22px; border: 1px solid rgba(16, 185, 129, 0.45); box-shadow: 0 10px 30px -5px rgba(6, 78, 59, 0.4);">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <span style="background: rgba(16, 185, 129, 0.3); border: 1px solid #10b981; color: #a7f3d0; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px; text-transform: uppercase;">Top Tier Calibrated</span>
+                    </div>
+                    <h3 style="color: white; margin: 0 0 4px 0; font-family: 'Outfit', sans-serif; font-size: 24px;">🎉 Outstanding Performance!</h3>
+                    <p style="margin: 0; color: #d1fae5; font-size: 14.5px;">Exceptional conceptual precision and distractor resistance. Review distractor traps and calibration telemetry below.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1278,9 +1628,12 @@ def show_practice() -> None:
         elif accuracy >= 50:
             st.markdown(
                 """
-                <div style="background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.2);">
-                    <h3 style="color: white; margin: 0 0 4px 0;">👍 Solid Practice Drill!</h3>
-                    <p style="margin: 0; color: #dbeafe; font-size: 14px;">Good effort. Pay close attention to nuanced distractors and statement elimination below.</p>
+                <div style="background: radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.25) 0%, transparent 60%), linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #0f172a 100%); color: white; padding: 22px 28px; border-radius: 18px; margin-bottom: 22px; border: 1px solid rgba(59, 130, 246, 0.45); box-shadow: 0 10px 30px -5px rgba(30, 58, 138, 0.4);">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <span style="background: rgba(59, 130, 246, 0.3); border: 1px solid #60a5fa; color: #bfdbfe; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px; text-transform: uppercase;">On Track</span>
+                    </div>
+                    <h3 style="color: white; margin: 0 0 4px 0; font-family: 'Outfit', sans-serif; font-size: 24px;">👍 Solid Practice Drill!</h3>
+                    <p style="margin: 0; color: #dbeafe; font-size: 14.5px;">Good performance. Pay close attention to nuanced distractors and elimination techniques below.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1288,9 +1641,12 @@ def show_practice() -> None:
         else:
             st.markdown(
                 """
-                <div style="background: linear-gradient(135deg, #991b1b 0%, #b91c1c 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(153, 27, 27, 0.2);">
-                    <h3 style="color: white; margin: 0 0 4px 0;">⚠️ Targeted Remediation Needed</h3>
-                    <p style="margin: 0; color: #fee2e2; font-size: 14px;">Conceptual gaps detected. Use the 'Explain My Mistake with AI Tutor' button on missed questions below.</p>
+                <div style="background: radial-gradient(circle at 10% 20%, rgba(239, 68, 68, 0.25) 0%, transparent 60%), linear-gradient(135deg, #7f1d1d 0%, #b91c1c 60%, #450a0a 100%); color: white; padding: 22px 28px; border-radius: 18px; margin-bottom: 22px; border: 1px solid rgba(239, 68, 68, 0.45); box-shadow: 0 10px 30px -5px rgba(127, 29, 29, 0.4);">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <span style="background: rgba(239, 68, 68, 0.3); border: 1px solid #f87171; color: #fecaca; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px; text-transform: uppercase;">Needs Remediation</span>
+                    </div>
+                    <h3 style="color: white; margin: 0 0 4px 0; font-family: 'Outfit', sans-serif; font-size: 24px;">⚠️ Targeted Remediation Needed</h3>
+                    <p style="margin: 0; color: #fee2e2; font-size: 14.5px;">Conceptual gaps detected. Use the 'Explain My Mistake with AI Tutor' button on missed questions below.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1494,11 +1850,30 @@ def show_practice() -> None:
 
             with col_q:
                 with st.container(border=True):
-                    q_badge = "🏛️ Official PYQ" if row.get("source_type") == "Official PYQ" else "🤖 Practice MCQ"
-                    st.caption(
-                        f"**Question {curr_idx + 1} of {len(q_frame)}** · {q_badge} · "
-                        f"`{row['subject']}` → `{row['topic']}` · Difficulty: **{row.get('difficulty', 'Medium')}** · "
-                        f"Negative Marking: `-{active_test['negative_rate']}`"
+                    q_badge_cls = "badge-pyq" if row.get("source_type") == "Official PYQ" else "badge-ai"
+                    q_badge_text = "🏛️ Official PYQ" if row.get("source_type") == "Official PYQ" else "🤖 Practice MCQ"
+                    diff_val = row.get("difficulty", "Medium")
+                    diff_cls = f"badge-difficulty-{diff_val.lower()}"
+
+                    st.markdown(
+                        f"""
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;">
+                                <span class="bpsc-badge {q_badge_cls}">{q_badge_text}</span>
+                                <span class="bpsc-badge {diff_cls}">{diff_val}</span>
+                                <span style="font-size: 12.5px; font-weight: 600; color: #94a3b8; margin-left: 4px;">
+                                    {row['subject']} &rarr; {row['topic']}
+                                </span>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <span class="cbt-marking-pill">Penalty: -{active_test['negative_rate']}</span>
+                                <span style="font-size: 12px; font-weight: 700; color: #e2e8f0; background: rgba(255,255,255,0.06); padding: 3px 10px; border-radius: 999px;">
+                                    Q. {curr_idx + 1} / {len(q_frame)}
+                                </span>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
                     )
                     st.markdown(f"#### {row['question']}")
 
@@ -2745,9 +3120,13 @@ def main() -> None:
     st.sidebar.markdown(
         f"""
         <div class="sidebar-brand-card">
-            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #fbbf24; font-weight: 700;">Government Examination Lab</div>
-            <div style="font-size: 18px; font-weight: 800; margin: 4px 0;">🏛️ BPSC QUESTION LAB</div>
-            <div style="font-size: 12px; color: #cbd5e1;">v{APP_VERSION} · BPSC CCE & UPSC</div>
+            <div class="brand-sub">Government Examination Lab</div>
+            <div class="brand-name">🏛️ BPSC QUESTION LAB</div>
+            <div class="brand-ver">
+                <span>v{APP_VERSION}</span> · 
+                <span style="color: #10b981; font-weight: 700;">● Online</span> · 
+                <span>BPSC & UPSC</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2769,11 +3148,14 @@ def main() -> None:
     st.sidebar.markdown(
         """
         <div class="sidebar-target-box">
-            <b style="color: #1e3a8a;">🎯 Target: 71st / 72nd BPSC Prelims</b><br>
-            <span style="font-size: 12px; color: #475569;">
-            • 150 MCQs · 120 Mins · Negative: -0.33<br>
-            • Focus: Bihar History, Geography, Polity, Science, Current Affairs
-            </span>
+            <div style="font-weight: 700; color: #60a5fa; margin-bottom: 5px; display: flex; align-items: center; justify-content: space-between;">
+                <span>🎯 Target: 71st BPSC Prelims</span>
+                <span style="font-size: 11px; background: rgba(59, 130, 246, 0.25); border: 1px solid rgba(59, 130, 246, 0.4); padding: 2px 7px; border-radius: 999px; font-weight: 600;">-0.33 Mark</span>
+            </div>
+            <div style="font-size: 12px; color: #cbd5e1; line-height: 1.5;">
+                • 150 Questions · 120 Minutes<br>
+                • Core: Bihar Special, History, Polity, Science, Current Affairs
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
