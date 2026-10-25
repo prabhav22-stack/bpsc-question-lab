@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+question_lab.db*
+*.db
+backups/
+.env
+*.env
+.env.*
+!.env.example
+.streamlit/*
+!.streamlit/secrets.toml.example
+!.streamlit/config.toml
+secrets.toml
+.streamlit/secrets.toml
+cloudflared.exe
+*.log
