@@ -1,19 +1,20 @@
-"""BPSC Question Lab v1.0 - AI-Powered Exam Preparation Platform.
+"""BPSC Question Lab v2.0 - AI-Powered Exam Preparation Platform.
 
 An adaptive, evidence-based study and revision environment for BPSC CCE & UPSC Prelims.
-Integrates official Google Gemini SDK, deterministic analytics, adaptive spaced repetition,
-and Supabase cloud compatibility.
+Integrates official Google Gemini SDK, deterministic analytics, metacognitive calibration,
+adaptive spaced repetition, interactive OMR mock engine, and Supabase cloud compatibility.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import random
 import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -26,7 +27,7 @@ import revision_engine
 import schemas
 import supabase_client
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 
 # -----------------------------------------------------------------------------
 # Backward Compatibility Exports for Legacy Test Suite
@@ -34,22 +35,27 @@ APP_VERSION = "1.0.0"
 def connect_db():
     return db.connect_db()
 
+
 init_db = db.init_db
 insert_question = db.insert_question
 add_question = db.add_question
 list_questions = db.list_questions
 get_question_ids = db.get_question_ids
 
+
 def get_questions_by_ids(ids: List[int]):
     return db.get_questions_by_ids(ids, conn_factory=connect_db)
+
 
 record_attempt = db.record_attempt
 get_attempts = db.get_attempts
 get_topic_stats = db.get_topic_stats
 save_error_classification = db.save_error_classification
 
+
 def import_csv(uploaded_file: Any):
     return db.import_csv(uploaded_file, conn_factory=connect_db)
+
 
 SUBJECTS = db.SUBJECTS
 EXAMS = db.EXAMS
@@ -59,39 +65,33 @@ ERROR_TYPES = db.ERROR_TYPES
 SAMPLE_QUESTIONS = db.SAMPLE_QUESTIONS
 build_weekly_plan = revision_engine.build_weekly_plan
 
+NAV_PAGES = [
+    "Dashboard",
+    "Question Bank",
+    "AI Question Studio",
+    "Current Affairs Lab",
+    "Practice & Mock Tests",
+    "AI Study Tutor",
+    "AI Performance Coach",
+    "Error Notebook",
+    "Revision Planner",
+    "Settings & Data",
+]
 
 
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# App Initialization, Custom Styling & State Management
+# Custom UI Styling & Helper Utilities
 # -----------------------------------------------------------------------------
 
 def inject_custom_css() -> None:
-    """Inject modern, responsive CSS styling for high-yield exam preparation UI."""
+    """Inject modern, responsive CSS styling for cards, badges, and OMR palette."""
     css = """
     <style>
-    /* Global Container & Typography Polish */
     .block-container {
         padding-top: 1.8rem;
         padding-bottom: 3rem;
         max-width: 1200px;
     }
-    
-    /* Modern Card Container */
-    .bpsc-card {
-        background: var(--background-color, #ffffff);
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        border-radius: 12px;
-        padding: 18px 22px;
-        margin-bottom: 16px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-    .bpsc-card:hover {
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
-    }
-    
-    /* Hero Banner */
     .bpsc-hero {
         background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #1e293b 100%);
         color: #ffffff;
@@ -114,8 +114,6 @@ def inject_custom_css() -> None:
         text-transform: uppercase;
         margin-bottom: 8px;
     }
-    
-    /* Provenance Badges */
     .bpsc-badge {
         display: inline-flex;
         align-items: center;
@@ -161,8 +159,6 @@ def inject_custom_css() -> None:
         color: #991b1b;
         border: 1px solid #fecaca;
     }
-    
-    /* Metric Cards Enhancement */
     [data-testid="stMetric"] {
         background: rgba(248, 250, 252, 0.85);
         border: 1px solid rgba(226, 232, 240, 0.95);
@@ -170,8 +166,6 @@ def inject_custom_css() -> None:
         padding: 14px 18px;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     }
-    
-    /* Sidebar Brand Box */
     .sidebar-brand-card {
         background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
         color: white;
@@ -195,21 +189,169 @@ def inject_custom_css() -> None:
     st.markdown(css, unsafe_allow_html=True)
 
 
+def format_duration(seconds: float) -> str:
+    """Format seconds into mm:ss or hh:mm:ss string."""
+    total_sec = max(0, int(round(seconds)))
+    hrs, rem = divmod(total_sec, 3600)
+    mins, secs = divmod(rem, 60)
+    if hrs > 0:
+        return f"{hrs:02d}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
+def get_question_options_map(question_id: int) -> Dict[str, str]:
+    """Retrieve full A/B/C/D option dictionary for a given question_id."""
+    try:
+        df = db.get_questions_by_ids([question_id])
+        if not df.empty:
+            row = df.iloc[0]
+            return {
+                "A": str(row.get("option_a", "") or ""),
+                "B": str(row.get("option_b", "") or ""),
+                "C": str(row.get("option_c", "") or ""),
+                "D": str(row.get("option_d", "") or ""),
+            }
+    except Exception:
+        pass
+    return {"A": "", "B": "", "C": "", "D": ""}
+
+
+def _resolve_question_options(question_id: Optional[int], fallback_row: Optional[Any] = None) -> Dict[str, str]:
+    """Safely retrieve all 4 options (A-D) so AI Tutor & Diagnosis never lose context."""
+    opts = {"A": "", "B": "", "C": "", "D": ""}
+    if fallback_row is not None:
+        if isinstance(fallback_row, dict) and isinstance(fallback_row.get("options"), dict):
+            for k in ["A", "B", "C", "D"]:
+                opts[k] = str(fallback_row["options"].get(k, "") or "")
+            if any(opts.values()):
+                return opts
+        for k, col in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
+            val = fallback_row.get(col, "") if hasattr(fallback_row, "get") else ""
+            if val is not None and str(val).strip():
+                opts[k] = str(val).strip()
+        if any(opts.values()):
+            return opts
+
+    if question_id is not None and int(question_id) > 0:
+        opts = get_question_options_map(int(question_id))
+    return opts
+
+
+def get_pinned_questions_df() -> pd.DataFrame:
+    """Safely retrieve all pinned questions with their metadata."""
+    all_q = db.list_questions()
+    if all_q.empty:
+        return pd.DataFrame()
+    pinned_ids = [int(qid) for qid in all_q["id"].tolist() if db.is_question_pinned(int(qid))]
+    if not pinned_ids:
+        return pd.DataFrame()
+    return all_q[all_q["id"].isin(pinned_ids)].copy()
+
+
+def get_saved_research_notes() -> pd.DataFrame:
+    """Safely fetch saved research notes from the local SQLite database."""
+    try:
+        with db.connect_db() as conn:
+            return pd.read_sql_query(
+                "SELECT * FROM research_notes ORDER BY id DESC", conn
+            )
+    except Exception:
+        return pd.DataFrame()
+
+
+def compute_confidence_calibration(attempts: pd.DataFrame) -> Dict[str, Any]:
+    """Compute metacognitive calibration metrics from attempt confidence ratings."""
+    if attempts.empty or "confidence_rating" not in attempts.columns:
+        return {
+            "high_conf_total": 0,
+            "high_conf_accuracy": 0.0,
+            "blind_spots": 0,
+            "guess_total": 0,
+            "guess_net_score": 0.0,
+            "breakdown": pd.DataFrame(),
+        }
+
+    df = attempts[attempts["selected_option"] != "-"].copy()
+    if df.empty:
+        return {
+            "high_conf_total": 0,
+            "high_conf_accuracy": 0.0,
+            "blind_spots": 0,
+            "guess_total": 0,
+            "guess_net_score": 0.0,
+            "breakdown": pd.DataFrame(),
+        }
+
+    df["confidence_rating"] = df["confidence_rating"].fillna("Medium").replace("", "Medium")
+    high_df = df[df["confidence_rating"] == "High"]
+    guess_df = df[df["confidence_rating"] == "Guess"]
+
+    high_total = len(high_df)
+    high_acc = round(high_df["is_correct"].mean() * 100, 1) if high_total > 0 else 0.0
+    blind_spots = int((high_df["is_correct"] == 0).sum()) if high_total > 0 else 0
+
+    guess_total = len(guess_df)
+    guess_net = float(guess_df["score"].sum()) if (guess_total > 0 and "score" in guess_df.columns) else 0.0
+
+    rows = []
+    for level in ["High", "Medium", "Guess"]:
+        sub = df[df["confidence_rating"] == level]
+        if not sub.empty:
+            cnt = len(sub)
+            corr = int(sub["is_correct"].sum())
+            wrong = cnt - corr
+            acc = round((corr / cnt) * 100, 1)
+            net = round(float(sub["score"].sum()), 2) if "score" in sub.columns else float(corr)
+            rows.append({
+                "Confidence Level": level,
+                "Attempts": cnt,
+                "Correct": corr,
+                "Incorrect": wrong,
+                "Accuracy (%)": acc,
+                "Net Marks": net,
+            })
+
+    return {
+        "high_conf_total": high_total,
+        "high_conf_accuracy": high_acc,
+        "blind_spots": blind_spots,
+        "guess_total": guess_total,
+        "guess_net_score": round(guess_net, 2),
+        "breakdown": pd.DataFrame(rows),
+    }
+
+
+def navigate_to(page_name: str) -> None:
+    """Programmatically route to a target navigation view without widget conflicts."""
+    if page_name in NAV_PAGES:
+        st.session_state["nav_page"] = page_name
+        st.session_state["_nav_radio_widget"] = page_name
+        st.rerun()
+
+
+# -----------------------------------------------------------------------------
+# App Initialization & State Management
+# -----------------------------------------------------------------------------
+
 def init_session_state() -> None:
     """Initialize Streamlit session state variables."""
     db.init_db()
-    if "active_test" not in st.session_state:
-        st.session_state["active_test"] = None
-    if "test_results" not in st.session_state:
-        st.session_state["test_results"] = None
-    if "studio_questions" not in st.session_state:
-        st.session_state["studio_questions"] = None
-    if "tutor_history" not in st.session_state:
-        st.session_state["tutor_history"] = []
-    if "tutor_context_question" not in st.session_state:
-        st.session_state["tutor_context_question"] = None
-    if "authenticated_user" not in st.session_state:
-        st.session_state["authenticated_user"] = None
+    defaults: Dict[str, Any] = {
+        "nav_page": "Dashboard",
+        "active_test": None,
+        "test_results": None,
+        "studio_questions": None,
+        "studio_exemplars": [],
+        "ca_questions": None,
+        "ca_exemplars": [],
+        "tutor_history": [],
+        "tutor_context_question": None,
+        "authenticated_user": None,
+        "target_exam_name": "71st / 72nd BPSC CCE Prelims",
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
 
 # -----------------------------------------------------------------------------
@@ -217,14 +359,14 @@ def init_session_state() -> None:
 # -----------------------------------------------------------------------------
 
 def show_dashboard() -> None:
-    """Overview dashboard with key deterministic metrics, syllabus readiness, and quick study tools."""
+    """Overview dashboard with key deterministic metrics, confidence telemetry, and study tools."""
     st.markdown(
         """
         <div class="bpsc-hero">
-            <span class="bpsc-hero-badge">🎯 71st BPSC CCE Prelims Target Tracker</span>
-            <h2 style="color: white; margin: 8px 0 4px 0; font-size: 26px; font-weight: 800;">BPSC Question Lab</h2>
+            <span class="bpsc-hero-badge">🎯 71st / 72nd BPSC CCE Prelims Target Tracker</span>
+            <h2 style="color: white; margin: 8px 0 4px 0; font-size: 26px; font-weight: 800;">BPSC Question Lab v2.0</h2>
             <p style="color: #cbd5e1; margin: 0; font-size: 14px;">
-                Evidence-based exam preparation with authentic 10-year PYQ benchmarks, AI practice sets, and deterministic spaced repetition.
+                Evidence-based exam preparation with authentic 10-year PYQ benchmarks, interactive CBT OMR simulation, and metacognitive calibration.
             </p>
         </div>
         """,
@@ -235,27 +377,34 @@ def show_dashboard() -> None:
     sessions = db.get_test_sessions()
     overall = analytics.compute_overall_metrics(attempts, sessions)
     q_all = db.list_questions()
-    pyq_count = len(q_all[q_all["source_type"] == "Official PYQ"]) if not q_all.empty else 0
+    pinned_df = get_pinned_questions_df()
+    calibration = compute_confidence_calibration(attempts)
 
-    # Top KPI Metrics with helpful tooltips and status deltas
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Question Bank", f"{len(q_all)} MCQs", help=f"Includes {pyq_count} verified official BPSC PYQs")
-    k2.metric("Tests Completed", overall["total_tests"], help="Total mock and drill test sessions recorded")
-    k3.metric("Total Attempts", overall["total_attempts"], help="Individual question attempts logged")
-    
-    acc_val = f"{overall['accuracy']}%" if overall["total_attempts"] > 0 else "N/A"
-    acc_delta = "Ready" if overall["accuracy"] >= 70 else ("In Progress" if overall["total_attempts"] > 0 else None)
-    k4.metric("Overall Accuracy", acc_val, delta=acc_delta)
-    
-    k5.metric("Net Score", f"{overall['net_score']:.1f}", help="With official negative marking (-0.33) applied")
+    # Top KPI Metrics
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Question Bank", len(q_all))
+    k2.metric("Tests Completed", overall["total_tests"])
+    k3.metric("Total Attempts", overall["total_attempts"])
+    k4.metric(
+        "Overall Accuracy",
+        f"{overall['accuracy']}%" if overall["total_attempts"] > 0 else "N/A",
+    )
+    k5.metric("Net Score", f"{overall['net_score']:.2f}")
+    k6.metric(
+        "High-Conf Blind Spots",
+        calibration["blind_spots"],
+        help="Incorrect answers where you rated your confidence as 'High'.",
+    )
 
     # Cloud & AI System Status Pills
     s1, s2 = st.columns(2)
     with s1:
         if config.is_gemini_configured():
-            st.success(f"🤖 Gemini AI: Connected ({config.get_gemini_model()})")
+            st.success(f"🤖 Gemini AI: Connected (`{config.get_gemini_model()}`)")
         else:
-            st.warning("🤖 Gemini AI: Not configured. Set GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env`.")
+            st.warning(
+                "🤖 Gemini AI: Not configured. Set `GEMINI_API_KEY` in `.streamlit/secrets.toml` or `.env`."
+            )
     with s2:
         if config.is_supabase_configured():
             user = st.session_state.get("authenticated_user")
@@ -264,71 +413,127 @@ def show_dashboard() -> None:
             else:
                 st.info("☁️ Supabase Cloud: Ready (Login under Settings to sync data)")
         else:
-            st.caption("💾 Local Mode: Storing data safely in local SQLite database")
+            st.info(
+                f"💾 Local SQLite Mode · {len(pinned_df)} Pinned Question(s) in Revision Vault"
+            )
 
     st.divider()
 
-    # Visual Analytics & Weak Spots
+    # Topic Analytics & Quick Actions
     col_left, col_right = st.columns([3, 2])
     with col_left:
         st.subheader("📊 Syllabus Mastery & Weak Spots")
         if not attempts.empty:
-            # Subject Mastery Bar Chart
-            try:
-                subj_acc = attempts.groupby("subject").apply(
-                    lambda g: round((g["is_correct"] == 1).sum() / len(g) * 100)
-                ).to_frame(name="Accuracy (%)")
-                if not subj_acc.empty:
-                    st.caption("Subject-wise Accuracy Breakdown (%)")
-                    st.bar_chart(subj_acc, color="#3b82f6", use_container_width=True)
-            except Exception:
-                pass
-
             topic_df = analytics.compute_topic_analytics(attempts)
-            weak = analytics.identify_weak_areas(topic_df, max_items=5)
+            weak = analytics.identify_weak_areas(topic_df, max_items=6)
             if not weak.empty:
-                st.write("**Top Priority Topics for Revision:**")
                 st.dataframe(
-                    weak[["subject", "topic", "attempts", "accuracy", "sample_size_label", "priority"]].rename(
-                        columns={"attempts": "Attempts", "accuracy": "Accuracy (%)", "sample_size_label": "Evidence", "priority": "Urgency"}
+                    weak[
+                        [
+                            "subject",
+                            "topic",
+                            "attempts",
+                            "accuracy",
+                            "sample_size_label",
+                            "priority",
+                        ]
+                    ].rename(
+                        columns={
+                            "subject": "Subject",
+                            "topic": "Topic",
+                            "attempts": "Attempts",
+                            "accuracy": "Accuracy (%)",
+                            "sample_size_label": "Evidence",
+                            "priority": "Urgency",
+                        }
                     ),
                     use_container_width=True,
                     hide_index=True,
                 )
             else:
-                st.success("🎉 No critical weak spots detected with low accuracy! Keep practising.")
+                st.success(
+                    "No critical weak spots detected with low accuracy! Keep practising to expand coverage."
+                )
+
+            # Subject Mastery Breakdown Bar Chart
+            with st.expander("📈 View Subject-Wise Accuracy & Question Bank Coverage", expanded=False):
+                try:
+                    subj_acc = attempts.groupby("subject").apply(
+                        lambda g: round((g["is_correct"] == 1).sum() / len(g) * 100)
+                    ).to_frame(name="Accuracy (%)")
+                    if not subj_acc.empty:
+                        st.bar_chart(subj_acc, color="#3b82f6", use_container_width=True)
+                except Exception:
+                    pass
         else:
-            st.info("No test attempts recorded yet. Start a test to reveal your subject mastery breakdown.")
+            st.info(
+                "No test attempts recorded yet. Start a practice test to unlock syllabus diagnostics."
+            )
 
     with col_right:
-        st.subheader("🎯 Quick Actions")
-        with st.container(border=True):
-            st.markdown("**🚀 Start Practice Test**")
-            st.caption("Timed drills or full mocks with customizable negative marking.")
-            if st.button("Launch Practice Test", type="primary", use_container_width=True):
-                st.session_state["nav_page"] = "Practice & Mock Tests"
-                st.rerun()
+        st.subheader("🎯 Rapid Launchpad")
+        if st.button("🚀 Start Practice / Mock Test", type="primary", use_container_width=True):
+            navigate_to("Practice & Mock Tests")
 
-        with st.container(border=True):
-            st.markdown("**✨ AI Question Studio**")
-            st.caption("Generate exam-grade questions benchmarked against official PYQs.")
-            if st.button("Open Question Studio", use_container_width=True):
-                st.session_state["nav_page"] = "AI Question Studio"
-                st.rerun()
+        c_q1, c_q2 = st.columns(2)
+        if c_q1.button("✨ AI Question Studio", use_container_width=True):
+            navigate_to("AI Question Studio")
+        if c_q2.button("📰 Current Affairs Lab", use_container_width=True):
+            navigate_to("Current Affairs Lab")
 
-        with st.container(border=True):
-            st.markdown("**📕 Error Notebook**")
-            st.caption("Analyze incorrect attempts and diagnose recurring mistakes.")
-            if st.button("Review My Mistakes", use_container_width=True):
-                st.session_state["nav_page"] = "Error Notebook"
-                st.rerun()
+        c_q3, c_q4 = st.columns(2)
+        if c_q3.button("📕 Error Notebook", use_container_width=True):
+            navigate_to("Error Notebook")
+        if c_q4.button("📅 Revision Planner", use_container_width=True):
+            navigate_to("Revision Planner")
 
-        with st.container(border=True):
-            st.markdown("**📅 Adaptive Revision Plan**")
-            st.caption("7-day spaced repetition schedule based on your performance.")
-            if st.button("View Revision Schedule", use_container_width=True):
-                st.session_state["nav_page"] = "Revision Planner"
-                st.rerun()
+        # Instant 5-Question Quick Drill
+        if not q_all.empty:
+            st.markdown("##### ⚡ 5-Minute Express Drill")
+            if st.button("Launch 5-Q Mixed BPSC Drill (-0.33 Marking)", use_container_width=True):
+                all_ids = q_all["id"].astype(int).tolist()
+                chosen = random.sample(all_ids, k=min(5, len(all_ids)))
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": chosen,
+                    "exam": "BPSC",
+                    "test_mode": "Timed Drill (1 min/Q)",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": False,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+    # Recent Test Sessions History
+    if not sessions.empty:
+        st.divider()
+        st.subheader("🕒 Recent Test Sessions")
+        disp_sess = sessions.head(8).copy()
+        cols_to_show = [
+            c
+            for c in [
+                "session_id",
+                "exam",
+                "test_mode",
+                "total_questions",
+                "correct_count",
+                "incorrect_count",
+                "unanswered_count",
+                "total_score",
+                "time_spent_seconds",
+                "completed_at",
+            ]
+            if c in disp_sess.columns
+        ]
+        st.dataframe(disp_sess[cols_to_show], use_container_width=True, hide_index=True)
 
 
 # -----------------------------------------------------------------------------
@@ -336,59 +541,109 @@ def show_dashboard() -> None:
 # -----------------------------------------------------------------------------
 
 def show_question_bank() -> None:
-    """Browse, filter, search, import, and export the question bank with rich interactive cards."""
+    """Browse, filter, search, manually create, import, and export questions."""
     st.title("📖 Question Bank")
-    st.caption("Browse, filter, search, and export official PYQs and practice questions.")
+    st.write("Browse, filter, add custom questions, pin items for revision, or bulk import/export via CSV.")
+
+    top_col1, top_col2 = st.columns(2)
+
+    # 1. CSV Import Expander
+    with top_col1:
+        with st.expander("📥 Import Questions from CSV", expanded=False):
+            upload = st.file_uploader(
+                "Upload CSV file",
+                type=["csv"],
+                help="Template columns: exam, subject, topic, question, option_a, option_b, option_c, option_d, correct_option",
+            )
+            if upload is not None and st.button("Import Uploaded CSV", type="primary"):
+                inserted, problems = db.import_csv(upload)
+                st.success(f"Successfully imported {inserted} question(s).")
+                for prob in problems[:10]:
+                    st.warning(prob)
+                if len(problems) > 10:
+                    st.caption(f"{len(problems) - 10} additional messages not shown.")
+                st.rerun()
+
+    # 2. Manual Question Creator Expander
+    with top_col2:
+        with st.expander("➕ Add Custom / Official PYQ Question Manually", expanded=False):
+            with st.form("manual_add_question_form", clear_on_submit=True):
+                mc1, mc2, mc3 = st.columns(3)
+                m_exam = mc1.selectbox("Exam", ["BPSC", "UPSC"], index=0)
+                m_subj = mc2.selectbox("Subject", db.SUBJECTS, index=0)
+                m_diff = mc3.selectbox("Difficulty", ["Easy", "Medium", "Hard"], index=1)
+
+                mc4, mc5, mc6 = st.columns(3)
+                m_topic = mc4.text_input("Topic*", placeholder="e.g. Champaran Satyagraha")
+                m_src = mc5.selectbox("Source Type", ["User-added", "Official PYQ", "Built-in sample"], index=0)
+                m_edition = mc6.text_input("Exam Edition (if PYQ)", placeholder="e.g. 69th BPSC Prelims")
+
+                m_qtext = st.text_area("Question Stem*", placeholder="Enter the full question text...")
+                mo1, mo2 = st.columns(2)
+                m_oa = mo1.text_input("Option A*")
+                m_ob = mo2.text_input("Option B*")
+                m_oc = mo1.text_input("Option C*")
+                m_od = mo2.text_input("Option D*")
+
+                mc_cor, mc_year = st.columns([2, 1])
+                m_cor = mc_cor.radio("Correct Option*", ["A", "B", "C", "D"], horizontal=True)
+                m_year = mc_year.number_input("Exam Year (optional)", min_value=1990, max_value=2030, value=2025)
+                m_exp = st.text_area("Detailed Explanation", placeholder="Why is this option correct and why are others wrong?")
+
+                if st.form_submit_button("💾 Save Question to Bank", type="primary"):
+                    if not (m_qtext.strip() and m_oa.strip() and m_ob.strip() and m_oc.strip() and m_od.strip()):
+                        st.error("Please fill in the question stem and all four options (A, B, C, D).")
+                    else:
+                        db.add_question({
+                            "exam": m_exam,
+                            "subject": m_subj,
+                            "topic": m_topic.strip() or "General",
+                            "question": m_qtext.strip(),
+                            "option_a": m_oa.strip(),
+                            "option_b": m_ob.strip(),
+                            "option_c": m_oc.strip(),
+                            "option_d": m_od.strip(),
+                            "correct_option": m_cor,
+                            "explanation": m_exp.strip(),
+                            "source_type": m_src,
+                            "exam_edition": m_edition.strip(),
+                            "exam_year": int(m_year) if m_src == "Official PYQ" else None,
+                            "difficulty": m_diff,
+                            "is_ai_generated": 0,
+                        })
+                        st.success("Question added to your Question Bank!")
+                        st.rerun()
 
     all_questions = db.list_questions()
     if all_questions.empty:
         st.info("Your question bank is empty. Add a question or import a CSV.")
         return
 
-    # Top KPI Summary Cards for Question Bank
-    pyqs = all_questions[all_questions["source_type"] == "Official PYQ"]
-    ai_qs = all_questions[all_questions["is_ai_generated"] == 1]
-    samples = all_questions[all_questions["source_type"] == "Built-in sample"]
+    # Filter Controls
+    c1, c2, c3, c4, c5, c6 = st.columns([1, 1.3, 1.3, 1.2, 1, 1.5])
+    exam_filter = c1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
+    subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
+    subject_filter = c2.selectbox("Subject", subjects, key="qb_subj")
 
-    qb1, qb2, qb3, qb4 = st.columns(4)
-    qb1.metric("Total Questions", len(all_questions))
-    qb2.metric("🏛️ Official PYQs", len(pyqs), help="Authentic questions from 60th to 69th BPSC CCE Prelims")
-    qb3.metric("🤖 AI Practice Sets", len(ai_qs), help="Generated practice questions matching BPSC standard")
-    qb4.metric("📌 Starter Samples", len(samples), help="Built-in curriculum anchor questions")
+    interim = db.list_questions(exam=exam_filter, subject=subject_filter)
+    topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
+    topic_filter = c3.selectbox("Topic", topics, key="qb_top")
 
-    # CSV Import Area
-    with st.expander("📥 Import Questions from CSV", expanded=False):
-        upload = st.file_uploader(
-            "Upload CSV file",
-            type=["csv"],
-            help="Template columns: exam, subject, topic, question, option_a, option_b, option_c, option_d, correct_option",
-        )
-        if upload is not None and st.button("Import Uploaded CSV", type="primary"):
-            inserted, problems = db.import_csv(upload)
-            st.success(f"Successfully imported {inserted} question(s).")
-            for prob in problems[:10]:
-                st.warning(prob)
-            if len(problems) > 10:
-                st.caption(f"{len(problems) - 10} additional messages not shown.")
-            st.rerun()
+    src_choices = ["All", "Official PYQ", "Built-in sample", "AI-generated", "User-added"]
+    source_filter = c4.selectbox("Provenance", src_choices, key="qb_src")
+    diff_filter = c5.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="qb_diff")
+    search_query = c6.text_input("Search Keyword", placeholder="e.g. Patna, Kunwar Singh...")
 
-    # Filter & Search Controls Container
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns(4)
-        exam_filter = c1.selectbox("Filter by Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
-        subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
-        subject_filter = c2.selectbox("Filter by Subject", subjects, key="qb_subj")
-
-        interim = db.list_questions(exam=exam_filter, subject=subject_filter)
-        topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
-        topic_filter = c3.selectbox("Filter by Topic", topics, key="qb_top")
-        
-        src_choices = ["All", "Official PYQ", "Built-in sample", "AI-generated", "User-added"]
-        source_filter = c4.selectbox("Provenance / Source", src_choices, key="qb_src")
-
-        search_query = st.text_input("🔍 Search Keyword in Questions, Topics, or Explanations", placeholder="e.g. Patna, Kunwar Singh, Champaran, Directive Principles...")
+    only_pinned = st.checkbox("📌 Show Pinned Questions Only", value=False, key="qb_only_pinned")
 
     filtered = db.list_questions(exam_filter, subject_filter, topic_filter, source_filter)
+    if diff_filter != "All" and "difficulty" in filtered.columns:
+        filtered = filtered[filtered["difficulty"] == diff_filter]
+
+    if only_pinned and not filtered.empty:
+        pinned_ids = [int(qid) for qid in filtered["id"].tolist() if db.is_question_pinned(int(qid))]
+        filtered = filtered[filtered["id"].isin(pinned_ids)]
+
     if search_query.strip():
         term = search_query.strip().lower()
         filtered = filtered[
@@ -397,79 +652,137 @@ def show_question_bank() -> None:
             | filtered["explanation"].str.lower().str.contains(term, na=False)
         ]
 
-    # Display Mode Toggle: Table View vs Interactive Question Cards
-    st.markdown(f"**Showing {len(filtered)} of {len(all_questions)} question(s)**")
-    view_mode = st.radio("Display Format", ["🗂️ Interactive Question Cards", "📋 Data Table"], horizontal=True, key="qb_view_mode")
+    # Action bar for filtered results
+    act_c1, act_c2 = st.columns([3, 1])
+    act_c1.caption(f"Showing **{len(filtered)}** of **{len(all_questions)}** total question(s).")
+    if not filtered.empty and act_c2.button("🎯 Practice Filtered Set", use_container_width=True):
+        f_ids = filtered["id"].astype(int).tolist()
+        chosen = random.sample(f_ids, k=min(15, len(f_ids)))
+        st.session_state["active_test"] = {
+            "session_id": str(uuid.uuid4())[:8],
+            "question_ids": chosen,
+            "exam": exam_filter if exam_filter != "All" else "BPSC",
+            "test_mode": "Filtered Question Bank Drill",
+            "ui_style": "Interactive OMR Palette",
+            "instant_feedback": True,
+            "negative_rate": 0.33,
+            "start_time": time.time(),
+            "current_index": 0,
+            "answers": {},
+            "confidences": {},
+            "marked_review": [],
+            "question_times": {},
+            "last_q_timestamp": time.time(),
+        }
+        st.session_state["test_results"] = None
+        navigate_to("Practice & Mock Tests")
 
-    if view_mode == "📋 Data Table":
-        disp_cols = [
-            "id", "source_type", "exam_edition", "exam_year", "subject", "topic",
-            "question", "correct_option", "difficulty", "answer_key_status"
-        ]
-        available_cols = [c for c in disp_cols if c in filtered.columns]
-        st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
-    else:
-        # Interactive Question Cards View
-        page_size = 10
-        total_pages = max(1, (len(filtered) - 1) // page_size + 1)
-        cur_page = st.number_input(f"Page (1 to {total_pages})", min_value=1, max_value=total_pages, value=1, step=1)
-        start_idx = (cur_page - 1) * page_size
-        page_items = filtered.iloc[start_idx : start_idx + page_size]
+    # Display Table with Provenance Columns
+    disp_cols = [
+        "id",
+        "source_type",
+        "exam_edition",
+        "exam_year",
+        "subject",
+        "topic",
+        "question",
+        "correct_option",
+        "difficulty",
+        "answer_key_status",
+    ]
+    available_cols = [c for c in disp_cols if c in filtered.columns]
+    st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
 
-        for _, q in page_items.iterrows():
-            qid = int(q["id"])
-            is_pyq = q.get("source_type") == "Official PYQ"
-            is_ai = bool(q.get("is_ai_generated"))
-            badge_class = "badge-pyq" if is_pyq else ("badge-ai" if is_ai else "badge-sample")
-            badge_icon = "🏛️" if is_pyq else ("🤖" if is_ai else "📌")
-            badge_text = "Official PYQ" if is_pyq else ("AI Practice" if is_ai else "Sample")
+    # Paginated Detailed Provenance Cards
+    with st.expander("🔍 Browse Detailed Question & Provenance Cards (Paginated)", expanded=True):
+        if filtered.empty:
+            st.info("No questions match the current filters.")
+        else:
+            page_size = 10
+            total_pages = max(1, (len(filtered) + page_size - 1) // page_size)
+            p_col1, p_col2 = st.columns([1, 3])
+            page_num = p_col1.number_input(
+                f"Page (1 to {total_pages})", min_value=1, max_value=total_pages, value=1, step=1
+            )
+            start_idx = (page_num - 1) * page_size
+            page_slice = filtered.iloc[start_idx : start_idx + page_size]
 
-            with st.container(border=True):
-                # Header with Provenance & Metadata
-                h_col1, h_col2 = st.columns([3, 1])
-                with h_col1:
-                    prov_info = f"<span class='bpsc-badge {badge_class}'>{badge_icon} {badge_text}</span>"
-                    if q.get("exam_edition"):
-                        prov_info += f" &nbsp;<b>{q['exam_edition']}</b>"
-                    if q.get("exam_year"):
-                        prov_info += f" ({q['exam_year']})"
-                    if q.get("official_qno") and int(q["official_qno"]) > 0:
-                        prov_info += f" · Q.{int(q['official_qno'])}"
-                    st.markdown(prov_info, unsafe_allow_html=True)
-                with h_col2:
-                    diff = q.get("difficulty", "Medium")
-                    diff_class = f"badge-difficulty-{diff.lower()}"
-                    st.markdown(f"<div style='text-align: right;'><span class='bpsc-badge {diff_class}'>{diff}</span></div>", unsafe_allow_html=True)
+            for _, q in page_slice.iterrows():
+                qid = int(q["id"])
+                is_pinned = db.is_question_pinned(qid)
+                badge = (
+                    "🏛️ Official Verified PYQ"
+                    if q.get("source_type") == "Official PYQ"
+                    else ("🤖 AI-Generated Practice" if q.get("is_ai_generated") else "📌 Practice Sample")
+                )
+                provenance_line = f"**{badge}** · `{q.get('subject', '')}` → `{q.get('topic', '')}` · Difficulty: **{q.get('difficulty', 'Medium')}**"
+                if q.get("exam_edition"):
+                    provenance_line += f" · {q['exam_edition']}"
+                if q.get("exam_year") and pd.notna(q.get("exam_year")):
+                    provenance_line += f" ({int(q['exam_year'])})"
+                if q.get("paper_set"):
+                    provenance_line += f" · {q['paper_set']}"
+                if q.get("official_qno") and pd.notna(q.get("official_qno")) and int(q["official_qno"]) > 0:
+                    provenance_line += f" · Q.{int(q['official_qno'])}"
 
-                st.caption(f"**Subject:** {q['subject']} &nbsp;|&nbsp; **Topic:** {q['topic']}")
-                st.markdown(f"**Q.{qid}: {q['question']}**")
+                with st.container(border=True):
+                    st.markdown(f"#### Question #{qid}: {q['question']}")
+                    st.caption(provenance_line)
+                    st.write(
+                        f"- **A.** {q['option_a']}\n"
+                        f"- **B.** {q['option_b']}\n"
+                        f"- **C.** {q['option_c']}\n"
+                        f"- **D.** {q['option_d']}"
+                    )
+                    with st.expander("Reveal Correct Option & Explanation", expanded=False):
+                        st.info(
+                            f"**Correct Option:** `{q['correct_option']}`\n\n"
+                            f"**Explanation:** {q.get('explanation', 'No explanation recorded.')}"
+                        )
+                        if q.get("distractor_notes"):
+                            st.caption(f"**Distractor Analysis:** {q['distractor_notes']}")
 
-                # Options Grid
-                o1, o2 = st.columns(2)
-                o1.markdown(f"**A.** {q['option_a']}")
-                o1.markdown(f"**B.** {q['option_b']}")
-                o2.markdown(f"**C.** {q['option_c']}")
-                o2.markdown(f"**D.** {q['option_d']}")
+                    b1, b2 = st.columns([1, 1])
+                    pin_lbl = "📌 Unpin Question" if is_pinned else "📍 Pin for Revision"
+                    if b1.button(pin_lbl, key=f"qb_pin_{qid}"):
+                        if is_pinned:
+                            db.unpin_question(qid)
+                        else:
+                            db.pin_question(qid, note=f"Pinned from Question Bank ({q.get('topic', '')})")
+                        st.rerun()
 
-                # Expandable Answer & Explanation
-                with st.expander(f"🔑 Reveal Correct Answer & Analysis", expanded=False):
-                    st.success(f"**Correct Option:** `{q['correct_option']}`")
-                    if q.get("explanation"):
-                        st.info(f"**Explanation:** {q['explanation']}")
-                    if q.get("distractor_notes"):
-                        st.caption(f"**Distractor Trap:** {q['distractor_notes']}")
-                    if q.get("concept_tested"):
-                        st.caption(f"**Core Concept:** {q['concept_tested']}")
+                    if config.is_gemini_configured() and b2.button("🎓 Discuss with AI Tutor", key=f"qb_tutor_{qid}"):
+                        opts_map = {
+                            "A": str(q["option_a"]),
+                            "B": str(q["option_b"]),
+                            "C": str(q["option_c"]),
+                            "D": str(q["option_d"]),
+                        }
+                        st.session_state["tutor_context_question"] = {
+                            "question_id": qid,
+                            "question": q["question"],
+                            "options": opts_map,
+                            "selected_option": "-",
+                            "selected_text": "Exploring from Question Bank",
+                            "correct_option": q["correct_option"],
+                            "correct_text": opts_map.get(q["correct_option"], ""),
+                            "explanation": q.get("explanation", ""),
+                            "subject": q["subject"],
+                            "topic": q["topic"],
+                        }
+                        navigate_to("AI Study Tutor")
 
     # Export Buttons
+    st.divider()
     col_exp1, col_exp2 = st.columns(2)
     with col_exp1:
         csv_bytes = all_questions.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "⬇️ Export Questions to CSV",
+            "⬇️ Export Full Question Bank to CSV",
             data=csv_bytes,
             file_name="bpsc_question_bank_export.csv",
             mime="text/csv",
+            use_container_width=True,
         )
     with col_exp2:
         attempts = db.get_attempts()
@@ -480,12 +793,7 @@ def show_question_bank() -> None:
                 data=att_csv,
                 file_name="bpsc_attempts_export.csv",
                 mime="text/csv",
-            )
-            st.download_button(
-                "⬇️ Export Attempt History to CSV",
-                data=att_csv,
-                file_name="bpsc_attempts_export.csv",
-                mime="text/csv",
+                use_container_width=True,
             )
 
 
@@ -522,7 +830,7 @@ SUBJECT_SUGGESTIONS: Dict[str, List[str]] = {
         "Champaran Satyagraha 1917",
         "Non-Cooperation & Civil Disobedience Movement",
         "Quit India Movement in Bihar",
-        "Indian National Congress Sessions (Gaya 1922, Patna)",
+        "Indian National Congress Sessions (Gaya 1922, Bankipore 1912)",
     ],
     "Indian Polity": [
         "Fundamental Rights & Constitutional Writs",
@@ -547,7 +855,7 @@ SUBJECT_SUGGESTIONS: Dict[str, List[str]] = {
     ],
     "Environment": [
         "National Parks & Tiger Reserves of Bihar & India",
-        "Wetlands & Ramsar Sites",
+        "Wetlands & Ramsar Sites (Kabartal, Nagi-Nakti)",
         "Biodiversity Hotspots & Wildlife Conservation",
         "Global Climate Treaties & Environmental Conventions",
     ],
@@ -555,11 +863,11 @@ SUBJECT_SUGGESTIONS: Dict[str, List[str]] = {
         "Indus Valley & Vedic Period",
         "Rise of Magadha & Mauryan Administration",
         "Buddhist & Jain Councils in Bihar",
-        "Gupta Golden Age & Nalanda University",
-        "Medieval Sultans & Mughals in Bihar",
+        "Gupta Golden Age & Nalanda/Vikramshila University",
+        "Medieval Sultans, Sher Shah Suri & Mughals in Bihar",
     ],
     "Other": [
-        "General Studies & CSAT",
+        "General Mental Ability & Quantitative Aptitude",
     ],
 }
 
@@ -569,11 +877,13 @@ def show_question_studio() -> None:
     st.title("✨ AI Question Studio")
     st.write(
         "Generate authentic, syllabus-aligned practice questions for BPSC and UPSC Prelims. "
-        "Questions are strictly practice material inspired by exam patterns, never falsified as official PYQs."
+        "Questions are calibrated against verified PYQ benchmarks and never falsified as official PYQs."
     )
 
     if not config.is_gemini_configured():
-        st.warning("⚠️ Gemini API is not configured. Please add `GEMINI_API_KEY` to your environment to enable AI generation.")
+        st.warning(
+            "⚠️ Gemini API is not configured. Please add `GEMINI_API_KEY` to your environment to enable AI generation."
+        )
         return
 
     with st.container(border=True):
@@ -592,7 +902,12 @@ def show_question_studio() -> None:
             key=preset_key,
         )
         if chosen_preset == "Custom Topic...":
-            topic = c4.text_input("Enter Custom Topic", value="", placeholder="e.g. Endocrine system", key=f"custom_topic_text_{subject}")
+            topic = c4.text_input(
+                "Enter Custom Topic",
+                value="",
+                placeholder="e.g. Endocrine system",
+                key=f"custom_topic_text_{subject}",
+            )
             if not topic.strip():
                 topic = suggestions[0]
         else:
@@ -600,7 +915,7 @@ def show_question_studio() -> None:
 
         subtopic = c5.text_input(
             "Subtopic / Theme (Optional)",
-            placeholder="e.g. Key mechanisms, dates, or provisions",
+            placeholder="e.g. Key mechanisms, dates, or constitutional articles",
             key=f"subtopic_input_{subject}",
         )
         count = c6.slider("Number of Questions", min_value=1, max_value=10, value=3)
@@ -616,7 +931,7 @@ def show_question_studio() -> None:
                 "Assertion and Reason",
                 "Bihar Special Focus",
             ],
-            index=0,
+            index=1,
         )
         focus = c8.selectbox(
             "Pedagogical Focus",
@@ -631,11 +946,10 @@ def show_question_studio() -> None:
 
         notes_context = st.text_area(
             "Source Material or Reference Notes (Optional)",
-            placeholder="Paste excerpts from notes, articles, or syllabus documents here...",
+            placeholder="Paste excerpts from NCERTs, Bihar Economic Survey, or lecture notes here...",
             height=100,
         )
 
-        # Show which genuine BPSC PYQs are available as few-shot exemplars for this subject/topic
         available_exemplars = db.retrieve_pyq_exemplars(
             subject=subject,
             topic=topic.strip() or "General",
@@ -643,21 +957,27 @@ def show_question_studio() -> None:
             limit=3,
         )
         if available_exemplars:
-            exemplar_editions = ", ".join(sorted({ex.get("exam_edition", "BPSC PYQ") for ex in available_exemplars if ex.get("exam_edition")}))
+            exemplar_editions = ", ".join(
+                sorted(
+                    {
+                        ex.get("exam_edition", "BPSC PYQ")
+                        for ex in available_exemplars
+                        if ex.get("exam_edition")
+                    }
+                )
+            )
             st.caption(
                 f"🏛️ **Strict BPSC Benchmark Active**: Will retrieve {len(available_exemplars)} genuine PYQ exemplar(s) "
                 f"({exemplar_editions}) to enforce authentic exam depth, multi-statement phrasing, and distractor plausibility."
             )
 
-        if st.button("Generate Questions", type="primary"):
+        if st.button("✨ Generate Calibrated Questions", type="primary"):
             with st.spinner("Retrieving BPSC PYQs and generating calibrated exam questions..."):
                 try:
-                    # Clean up all previous studio input keys to avoid stale text bleeding across generations
                     for k in list(st.session_state.keys()):
                         if k.startswith("sq_"):
                             del st.session_state[k]
 
-                    # Increment generation batch ID
                     gen_id = st.session_state.get("studio_gen_id", 0) + 1
                     st.session_state["studio_gen_id"] = gen_id
 
@@ -676,81 +996,144 @@ def show_question_studio() -> None:
                     st.session_state["studio_exemplars"] = q_set.retrieved_exemplars
                     st.session_state["studio_subject"] = subject
                     st.session_state["studio_topic"] = topic
-                    st.success(f"Generated {len(q_set.questions)} question(s) on '{subject} - {topic}' strictly calibrated against {len(q_set.retrieved_exemplars)} genuine BPSC Prelims PYQs!")
+                    st.success(
+                        f"Generated {len(q_set.questions)} question(s) on '{subject} - {topic}' strictly calibrated against "
+                        f"{len(q_set.retrieved_exemplars)} genuine BPSC Prelims PYQs!"
+                    )
                 except Exception as exc:
                     st.error(f"Generation error: {exc}")
 
     # 2. Preview, Edit & Save Area
     studio_items = st.session_state.get("studio_questions")
     if studio_items:
-        st.subheader("2. Review & Edit Questions Before Saving")
+        st.subheader("2. Review, Edit & Practice Generated Set")
 
         exemplars = st.session_state.get("studio_exemplars", [])
         if exemplars:
-            with st.expander(f"🏛️ View {len(exemplars)} Genuine BPSC Prelims PYQ Benchmarks Used for Generation", expanded=False):
-                st.caption("The AI model was instructed to strictly match the depth, statement structure, and distractor plausibility of these authentic BPSC questions:")
+            with st.expander(
+                f"🏛️ View {len(exemplars)} Genuine BPSC Prelims PYQ Benchmarks Used for Generation",
+                expanded=False,
+            ):
                 for ex in exemplars:
-                    st.markdown(f"**{ex.get('exam_edition', 'BPSC PYQ')}** (Q.{ex.get('official_qno', '-')}) · *{ex.get('subject')} · {ex.get('topic')}*")
+                    st.markdown(
+                        f"**{ex.get('exam_edition', 'BPSC PYQ')}** (Q.{ex.get('official_qno', '-')}) · *{ex.get('subject')} · {ex.get('topic')}*"
+                    )
                     st.markdown(f"> **{ex.get('question')}**")
-                    st.caption(f"Correct: **{ex.get('correct_option')}** · {ex.get('explanation', '')[:140]}...")
+                    st.caption(
+                        f"Correct: **{ex.get('correct_option')}** · {ex.get('explanation', '')[:160]}..."
+                    )
                     st.divider()
 
-        st.info("💡 You can edit any question stem, options, or explanation before saving to your Question Bank.")
+        st.info(
+            "💡 Edit any stem, option, or explanation below before saving to your Question Bank or launching an instant drill."
+        )
 
         gen_id = st.session_state.get("studio_gen_id", 0)
         questions_to_save: List[Dict[str, Any]] = []
         for i, q in enumerate(studio_items):
-            with st.expander(f"Question {i+1}: {q['question'][:80]}...", expanded=True):
-                q_text = st.text_area(f"Question #{i+1}", value=q["question"], key=f"sq_text_{gen_id}_{i}")
+            with st.expander(f"Question {i+1}: {q['question'][:85]}...", expanded=True):
+                q_text = st.text_area(
+                    f"Question #{i+1}", value=q["question"], key=f"sq_text_{gen_id}_{i}"
+                )
                 o1, o2 = st.columns(2)
                 oa = o1.text_input("Option A", value=q["option_a"], key=f"sq_oa_{gen_id}_{i}")
                 ob = o2.text_input("Option B", value=q["option_b"], key=f"sq_ob_{gen_id}_{i}")
                 oc = o1.text_input("Option C", value=q["option_c"], key=f"sq_oc_{gen_id}_{i}")
                 od = o2.text_input("Option D", value=q["option_d"], key=f"sq_od_{gen_id}_{i}")
 
-                curr_idx = ["A", "B", "C", "D"].index(q["correct_option"]) if q["correct_option"] in ["A", "B", "C", "D"] else 0
-                correct_opt = st.radio("Correct Answer", ["A", "B", "C", "D"], index=curr_idx, horizontal=True, key=f"sq_cor_{gen_id}_{i}")
+                curr_idx = (
+                    ["A", "B", "C", "D"].index(q["correct_option"])
+                    if q["correct_option"] in ["A", "B", "C", "D"]
+                    else 0
+                )
+                correct_opt = st.radio(
+                    "Correct Answer",
+                    ["A", "B", "C", "D"],
+                    index=curr_idx,
+                    horizontal=True,
+                    key=f"sq_cor_{gen_id}_{i}",
+                )
 
-                exp_text = st.text_area("Explanation", value=q.get("explanation", ""), key=f"sq_exp_{gen_id}_{i}")
-                dist_text = st.text_input("Distractor Notes", value=q.get("distractor_notes", ""), key=f"sq_dist_{gen_id}_{i}")
-                concept_tested = st.text_input("Concept Tested", value=q.get("concept_tested", ""), key=f"sq_con_{gen_id}_{i}")
+                exp_text = st.text_area(
+                    "Explanation", value=q.get("explanation", ""), key=f"sq_exp_{gen_id}_{i}"
+                )
+                dist_text = st.text_input(
+                    "Distractor Notes",
+                    value=q.get("distractor_notes", ""),
+                    key=f"sq_dist_{gen_id}_{i}",
+                )
+                concept_tested = st.text_input(
+                    "Concept Tested",
+                    value=q.get("concept_tested", ""),
+                    key=f"sq_con_{gen_id}_{i}",
+                )
 
-                questions_to_save.append({
-                    "exam": exam,
-                    "subject": q.get("subject") or subject,
-                    "topic": q.get("topic") or topic.strip() or "General",
-                    "subtopic": q.get("subtopic") or subtopic.strip(),
-                    "question": q_text.strip(),
-                    "option_a": oa.strip(),
-                    "option_b": ob.strip(),
-                    "option_c": oc.strip(),
-                    "option_d": od.strip(),
-                    "correct_option": correct_opt,
-                    "explanation": exp_text.strip(),
-                    "distractor_notes": dist_text.strip(),
-                    "concept_tested": concept_tested.strip(),
-                    "question_type": question_type,
-                    "source_type": "AI-generated",
-                    "source_name": "Question Studio",
-                    "source_url": "",
-                    "difficulty": difficulty if difficulty != "Mixed" else "Medium",
-                    "is_ai_generated": 1,
-                })
+                questions_to_save.append(
+                    {
+                        "exam": exam,
+                        "subject": q.get("subject") or subject,
+                        "topic": q.get("topic") or topic.strip() or "General",
+                        "subtopic": q.get("subtopic") or subtopic.strip(),
+                        "question": q_text.strip(),
+                        "option_a": oa.strip(),
+                        "option_b": ob.strip(),
+                        "option_c": oc.strip(),
+                        "option_d": od.strip(),
+                        "correct_option": correct_opt,
+                        "explanation": exp_text.strip(),
+                        "distractor_notes": dist_text.strip(),
+                        "concept_tested": concept_tested.strip(),
+                        "question_type": question_type,
+                        "source_type": "AI-generated",
+                        "source_name": "Question Studio",
+                        "source_url": "",
+                        "difficulty": difficulty if difficulty != "Mixed" else "Medium",
+                        "is_ai_generated": 1,
+                    }
+                )
 
-        col_save, col_clear = st.columns([2, 1])
-        if col_save.button("💾 Save All Questions to Question Bank", type="primary"):
-            saved_count = 0
+        col_save, col_save_practice, col_clear = st.columns([2, 2, 1])
+        if col_save.button("💾 Save All to Question Bank", type="primary", use_container_width=True):
             for item in questions_to_save:
                 db.add_question(item)
-                saved_count += 1
-            st.success(f"Saved {saved_count} questions into your Question Bank!")
+            st.success(f"Saved {len(questions_to_save)} questions into your Question Bank!")
             st.session_state["studio_questions"] = None
             for k in list(st.session_state.keys()):
                 if k.startswith("sq_"):
                     del st.session_state[k]
             st.rerun()
 
-        if col_clear.button("Discard Set"):
+        if col_save_practice.button("🚀 Save & Practice This Set Now", use_container_width=True):
+            new_ids = []
+            for item in questions_to_save:
+                qid = db.add_question(item)
+                if qid:
+                    new_ids.append(int(qid))
+            st.session_state["studio_questions"] = None
+            for k in list(st.session_state.keys()):
+                if k.startswith("sq_"):
+                    del st.session_state[k]
+            if new_ids:
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": new_ids,
+                    "exam": exam if exam != "Both" else "BPSC",
+                    "test_mode": "AI Studio Custom Drill",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": True,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+        if col_clear.button("🗑️ Discard", use_container_width=True):
             st.session_state["studio_questions"] = None
             for k in list(st.session_state.keys()):
                 if k.startswith("sq_"):
@@ -759,24 +1142,127 @@ def show_question_studio() -> None:
 
 
 # -----------------------------------------------------------------------------
-# Views: 4. Practice & Mock Tests
+# Views: 4. Practice & Mock Tests (Overhauled with Interactive OMR & Metacognition)
 # -----------------------------------------------------------------------------
+
+def finalize_test_submission(
+    active_test: Dict[str, Any],
+    q_frame: pd.DataFrame,
+    answers: Dict[int, str],
+    confidences: Dict[int, str],
+    question_times: Optional[Dict[int, float]] = None,
+) -> None:
+    """Grade test session, record attempts with per-question timing, and store full option maps."""
+    total_time_spent = max(0.1, round(time.time() - active_test["start_time"], 1))
+    results_items = []
+    correct_cnt = 0
+    incorrect_cnt = 0
+    unanswered_cnt = 0
+    total_score = 0.0
+    question_times = question_times or {}
+    fallback_per_q_time = round(total_time_spent / max(1, len(q_frame)), 1)
+
+    for _, row in q_frame.iterrows():
+        qid = int(row["id"])
+        chosen = answers.get(qid, "-")
+        correct = str(row["correct_option"]).strip()
+        is_correct = chosen == correct
+        confidence = confidences.get(qid, "Medium")
+        q_time = round(question_times.get(qid, fallback_per_q_time), 1)
+
+        if chosen == "-":
+            q_score = 0.0
+            unanswered_cnt += 1
+        elif is_correct:
+            q_score = 1.0
+            correct_cnt += 1
+        else:
+            q_score = -float(active_test["negative_rate"])
+            incorrect_cnt += 1
+        total_score += q_score
+
+        db.record_attempt(
+            question_id=qid,
+            selected_option=chosen,
+            correct_option=correct,
+            test_session_id=active_test["session_id"],
+            time_spent_seconds=q_time,
+            confidence_rating=confidence,
+            score=q_score,
+        )
+
+        opts = {
+            "A": str(row["option_a"]),
+            "B": str(row["option_b"]),
+            "C": str(row["option_c"]),
+            "D": str(row["option_d"]),
+        }
+        results_items.append(
+            {
+                "question_id": qid,
+                "question": row["question"],
+                "options": opts,
+                "selected_option": chosen,
+                "selected_text": opts.get(chosen, "Not answered"),
+                "is_correct": is_correct,
+                "correct_option": correct,
+                "correct_text": opts.get(correct, ""),
+                "explanation": row.get("explanation", ""),
+                "distractor_notes": row.get("distractor_notes", ""),
+                "subject": row["subject"],
+                "topic": row["topic"],
+                "confidence": confidence,
+                "time_spent": q_time,
+                "score": q_score,
+            }
+        )
+
+    db.record_test_session(
+        session_id=active_test["session_id"],
+        exam=active_test["exam"],
+        test_mode=active_test["test_mode"],
+        total_questions=len(q_frame),
+        correct_count=correct_cnt,
+        incorrect_count=incorrect_cnt,
+        unanswered_count=unanswered_cnt,
+        negative_mark_rate=active_test["negative_rate"],
+        total_score=round(total_score, 2),
+        time_spent_seconds=total_time_spent,
+    )
+
+    st.session_state["test_results"] = {
+        "session_id": active_test["session_id"],
+        "test_mode": active_test["test_mode"],
+        "negative_rate": active_test["negative_rate"],
+        "items": results_items,
+        "total_score": round(total_score, 2),
+        "time_spent": total_time_spent,
+    }
+    st.session_state["active_test"] = None
+
 
 def show_practice() -> None:
-    """Examination engine supporting practice tests, timed tests, and full mocks."""
+    """Examination engine supporting interactive OMR palette, full sheet mode, and metacognitive scorecards."""
     st.title("📝 Practice & Mock Tests")
-    st.caption("Customizable scoring, negative marking rules, confidence tracking, and error classification.")
+    st.caption(
+        "Interactive OMR Question Palette, BPSC 1/3rd negative marking simulation, confidence calibration, and instant mistake remediation."
+    )
 
     results = st.session_state.get("test_results")
     active_test = st.session_state.get("active_test")
 
-    # Display Test Results if just finished
+    # -------------------------------------------------------------------------
+    # A. Display Test Scorecard & Metacognitive Review if Test Just Finished
+    # -------------------------------------------------------------------------
     if results is not None:
-        total = len(results["items"])
-        correct = sum(1 for r in results["items"] if r["is_correct"])
-        incorrect = sum(1 for r in results["items"] if not r["is_correct"] and r["selected_option"] != "-")
-        unanswered = sum(1 for r in results["items"] if r["selected_option"] == "-")
-        accuracy = round(correct / total * 100) if total > 0 else 0
+        items = results["items"]
+        total = len(items)
+        correct = sum(1 for r in items if r["is_correct"])
+        incorrect = sum(1 for r in items if not r["is_correct"] and r["selected_option"] != "-")
+        unanswered = sum(1 for r in items if r["selected_option"] == "-")
+        attempted = correct + incorrect
+        accuracy = round(correct / attempted * 100, 1) if attempted > 0 else 0.0
+        penalty_lost = round(incorrect * float(results.get("negative_rate", 0.0)), 2)
 
         # Performance Headline Banner
         if accuracy >= 70:
@@ -784,7 +1270,7 @@ def show_practice() -> None:
                 """
                 <div style="background: linear-gradient(135deg, #065f46 0%, #047857 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(6, 95, 70, 0.2);">
                     <h3 style="color: white; margin: 0 0 4px 0;">🎉 Outstanding Performance!</h3>
-                    <p style="margin: 0; color: #d1fae5; font-size: 14px;">Strong conceptual grasp and answer selection. Review distractor traps below for complete mastery.</p>
+                    <p style="margin: 0; color: #d1fae5; font-size: 14px;">Strong conceptual precision. Review distractor traps and calibration insights below.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -810,146 +1296,330 @@ def show_practice() -> None:
                 unsafe_allow_html=True,
             )
 
-        sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-        sc1.metric("Net Score", f"{results['total_score']:.2f}", help="With official negative marking penalty applied")
-        sc2.metric("Accuracy", f"{accuracy}%")
-        sc3.metric("✅ Correct", correct)
-        sc4.metric("❌ Incorrect", incorrect)
-        sc5.metric("⚠️ Unanswered", unanswered)
+        sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
+        sc1.metric("Net Score", f"{results['total_score']:.2f} / {total}")
+        sc2.metric("Attempt Accuracy", f"{accuracy}%")
+        sc3.metric("Correct (+1.0)", correct)
+        sc4.metric("Incorrect", f"{incorrect} (-{penalty_lost:.2f})")
+        sc5.metric("Skipped", unanswered)
+        sc6.metric("Total Time", format_duration(results.get("time_spent", 0.0)))
 
-        st.caption(f"⏱️ Time spent: {results.get('time_spent', 0):.1f} seconds ({round(results.get('time_spent', 0) / max(1, total), 1)}s per question)")
+        # Metacognitive Confidence Breakdown on Scorecard
+        with st.expander("🧠 Metacognitive Confidence & Negative-Marking Calibration", expanded=True):
+            conf_rows = []
+            for c_lvl in ["High", "Medium", "Guess"]:
+                c_sub = [r for r in items if r.get("confidence", "Medium") == c_lvl and r["selected_option"] != "-"]
+                if c_sub:
+                    c_corr = sum(1 for r in c_sub if r["is_correct"])
+                    c_wrong = len(c_sub) - c_corr
+                    c_net = round(sum(float(r.get("score", 0.0)) for r in c_sub), 2)
+                    conf_rows.append({
+                        "Confidence Tier": c_lvl,
+                        "Attempted": len(c_sub),
+                        "Correct": c_corr,
+                        "Wrong": c_wrong,
+                        "Accuracy (%)": round(c_corr / len(c_sub) * 100, 1),
+                        "Net Score Impact": f"{c_net:+0.2f}",
+                    })
+            if conf_rows:
+                st.dataframe(pd.DataFrame(conf_rows), use_container_width=True, hide_index=True)
+                blind_spots = [
+                    r for r in items if not r["is_correct"] and r["selected_option"] != "-" and r.get("confidence") == "High"
+                ]
+                if blind_spots:
+                    st.warning(
+                        f"⚠️ **Blind Spot Alert:** You answered **{len(blind_spots)}** question(s) incorrectly despite marking **High Confidence**. Review these first below!"
+                    )
+
         st.divider()
 
-        # Detailed Review per Question
-        st.subheader("Question-by-Question Review & Distractor Analysis")
-        for idx, res in enumerate(results["items"], start=1):
-            if res["is_correct"]:
-                status = "✅ Correct (+1.0)"
-            elif res["selected_option"] == "-":
-                status = "⚠️ Skipped (0.0)"
-            else:
-                status = "❌ Incorrect"
+        # Filterable Detailed Review per Question
+        rev_filter = st.radio(
+            "Filter Question Review:",
+            ["All Questions", "❌ Incorrect Only", "⚠️ High-Confidence Mistakes", "⏭️ Unanswered Only"],
+            horizontal=True,
+        )
 
-            with st.expander(f"{status} | Q.{idx}: {res['question'][:80]}...", expanded=not res["is_correct"]):
-                st.markdown(f"**Question {idx}: {res['question']}**")
-                st.caption(f"**Subject:** {res['subject']} &nbsp;|&nbsp; **Topic:** {res['topic']}")
+        for idx, res in enumerate(items, start=1):
+            if rev_filter == "❌ Incorrect Only" and (res["is_correct"] or res["selected_option"] == "-"):
+                continue
+            if rev_filter == "⚠️ High-Confidence Mistakes" and (
+                res["is_correct"] or res["selected_option"] == "-" or res.get("confidence") != "High"
+            ):
+                continue
+            if rev_filter == "⏭️ Unanswered Only" and res["selected_option"] != "-":
+                continue
+
+            status = (
+                "✅ Correct"
+                if res["is_correct"]
+                else ("⚠️ Unanswered" if res["selected_option"] == "-" else "❌ Incorrect")
+            )
+            conf_badge = f"Confidence: {res.get('confidence', 'Medium')} · ⏱️ {res.get('time_spent', 0)}s"
+            with st.expander(
+                f"{status} | Q.{idx} ({res['subject']} · {res['topic']}) — {res['question'][:70]}...",
+                expanded=not res["is_correct"],
+            ):
+                st.caption(conf_badge)
+                st.markdown(f"**{res['question']}**")
+                opts_dict = res.get("options") or get_question_options_map(int(res["question_id"]))
+                for opt_k in ["A", "B", "C", "D"]:
+                    prefix = ""
+                    if opt_k == res["correct_option"]:
+                        prefix = "✅ "
+                    elif opt_k == res["selected_option"] and not res["is_correct"]:
+                        prefix = "❌ "
+                    st.write(f"{prefix}**{opt_k}.** {opts_dict.get(opt_k, '')}")
 
                 col_ans1, col_ans2 = st.columns(2)
                 with col_ans1:
                     ans_color = "#166534" if res["is_correct"] else "#991b1b"
-                    st.markdown(f"<div style='padding: 8px 12px; background: rgba(248, 250, 252, 0.8); border-radius: 8px;'><b>Your Selection:</b> <span style='color: {ans_color}; font-weight: 700;'>{res['selected_option']}. {res['selected_text']}</span></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='padding: 8px 12px; background: rgba(248, 250, 252, 0.8); border-radius: 8px;'><b>Your Selection:</b> <span style='color: {ans_color}; font-weight: 700;'>{res['selected_option']}. {res['selected_text']}</span></div>",
+                        unsafe_allow_html=True,
+                    )
                 with col_ans2:
-                    st.markdown(f"<div style='padding: 8px 12px; background: rgba(240, 253, 244, 0.8); border: 1px solid #bbf7d0; border-radius: 8px;'><b>Official Key:</b> <span style='color: #166534; font-weight: 700;'>{res['correct_option']}. {res['correct_text']}</span></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='padding: 8px 12px; background: rgba(240, 253, 244, 0.8); border: 1px solid #bbf7d0; border-radius: 8px;'><b>Official Key:</b> <span style='color: #166534; font-weight: 700;'>{res['correct_option']}. {res['correct_text']}</span></div>",
+                        unsafe_allow_html=True,
+                    )
 
-                st.write("")
                 if res.get("explanation"):
                     st.info(f"💡 **Detailed Explanation:**\n\n{res['explanation']}")
                 if res.get("distractor_notes"):
                     st.warning(f"⚠️ **Distractor Trap Analysis:**\n\n{res['distractor_notes']}")
 
-                # Action: Explain My Mistake with AI Tutor
-                if not res["is_correct"] and config.is_gemini_configured():
-                    if st.button(f"🔍 Explain My Mistake with AI Tutor", key=f"tutor_ask_{idx}"):
-                        st.session_state["tutor_context_question"] = res
-                        st.session_state["nav_page"] = "AI Study Tutor"
-                        st.rerun()
+                act1, act2 = st.columns(2)
+                qid = int(res["question_id"])
+                is_pinned = db.is_question_pinned(qid)
+                if act1.button(
+                    "📌 Unpin from Vault" if is_pinned else "📍 Pin Question to Revision Vault",
+                    key=f"res_pin_{idx}_{qid}",
+                ):
+                    if is_pinned:
+                        db.unpin_question(qid)
+                    else:
+                        db.pin_question(qid, note=f"Pinned after test session {results.get('session_id', '')}")
+                    st.rerun()
 
-        st.write("")
-        c_btn1, c_btn2 = st.columns([1, 2])
-        if c_btn1.button("Start Another Test", type="primary", use_container_width=True):
+                if not res["is_correct"] and config.is_gemini_configured():
+                    if act2.button(
+                        "🔍 Explain My Mistake with AI Tutor",
+                        key=f"tutor_ask_{idx}",
+                        type="primary",
+                    ):
+                        res["options"] = opts_dict
+                        st.session_state["tutor_context_question"] = res
+                        navigate_to("AI Study Tutor")
+
+        b_new, b_retry = st.columns(2)
+        if b_new.button("🚀 Configure Another Test", type="primary", use_container_width=True):
             st.session_state["test_results"] = None
             st.session_state["active_test"] = None
             st.rerun()
-        if c_btn2.button("Review Mistakes in Error Notebook", use_container_width=True):
+        wrong_ids = [int(r["question_id"]) for r in items if not r["is_correct"]]
+        if wrong_ids and b_retry.button(
+            f"🔁 Immediately Retry {len(wrong_ids)} Missed/Skipped Question(s)",
+            use_container_width=True,
+        ):
+            st.session_state["active_test"] = {
+                "session_id": str(uuid.uuid4())[:8],
+                "question_ids": wrong_ids,
+                "exam": "BPSC",
+                "test_mode": "Immediate Mistake Retry",
+                "ui_style": "Interactive OMR Palette",
+                "instant_feedback": True,
+                "negative_rate": float(results.get("negative_rate", 0.33)),
+                "start_time": time.time(),
+                "current_index": 0,
+                "answers": {},
+                "confidences": {},
+                "marked_review": [],
+                "question_times": {},
+                "last_q_timestamp": time.time(),
+            }
             st.session_state["test_results"] = None
-            st.session_state["active_test"] = None
-            st.session_state["nav_page"] = "Error Notebook"
             st.rerun()
         return
 
-    # Configuration for New Test
-    with st.container(border=True):
-        st.subheader("Configure Test Session")
-
-        f1, f2, f3, f4 = st.columns(4)
-        exam = f1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="p_exam")
-        subjects = ["All"] + sorted(db.list_questions()["subject"].dropna().unique().tolist())
-        subject = f2.selectbox("Subject", subjects, key="p_subj")
-        interim = db.list_questions(exam=exam, subject=subject)
-        topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
-        topic = f3.selectbox("Topic", topics, key="p_top")
-        src_types = ["All Questions", "Official PYQs Only", "AI Practice Sets", "Starter Samples"]
-        src_choice = f4.selectbox("Question Provenance", src_types, key="p_src")
-
-        src_map = {
-            "All Questions": "All",
-            "Official PYQs Only": "Official PYQ",
-            "AI Practice Sets": "AI-generated",
-            "Starter Samples": "Built-in sample",
-        }
-        matching_ids = db.get_question_ids(exam, subject, topic, source_type=src_map[src_choice])
-        if not matching_ids:
-            st.warning("No questions match these filters. Add or generate some questions first.")
-            return
-
-        st.caption(f"🎯 **{len(matching_ids)} question(s)** available matching this criteria.")
-
-        c_cnt, c_mode, c_neg = st.columns(3)
-        count = c_cnt.slider(
-            "Questions in test",
-            min_value=1,
-            max_value=min(50, len(matching_ids)),
-            value=min(10, len(matching_ids)),
-        )
-        test_mode = c_mode.selectbox(
-            "Test Mode", ["Practice (Untimed)", "Timed Drill (1 min/Q)", "Full Mock Exam"]
-        )
-        negative_rate = c_neg.selectbox(
-            "Negative Marking",
-            [0.0, 0.25, 0.33],
-            format_func=lambda x: f"None (0.0)" if x == 0.0 else f"-{x} marks per wrong answer",
-        )
-
-        if st.button("🚀 Start Test", type="primary", use_container_width=True):
-            selected_ids = random.sample(matching_ids, k=count)
-            st.session_state["active_test"] = {
-                "session_id": str(uuid.uuid4())[:8],
-                "question_ids": selected_ids,
-                "exam": exam,
-                "test_mode": test_mode,
-                "negative_rate": negative_rate,
-                "start_time": time.time(),
-            }
-            st.rerun()
-
-    # Active Test Submission Form
+    # -------------------------------------------------------------------------
+    # B. Active Test Interface (Interactive OMR Palette OR Full-Sheet Form)
+    # -------------------------------------------------------------------------
     if active_test:
         q_frame = db.get_questions_by_ids(active_test["question_ids"])
-        total_q = len(q_frame)
+        if q_frame.empty:
+            st.error("Unable to load questions for this test session.")
+            st.session_state["active_test"] = None
+            return
 
-        st.markdown(
-            f"""
-            <div style="background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%); color: white; padding: 14px 20px; border-radius: 12px; margin-bottom: 20px;">
-                <span style="font-size: 13px; font-weight: 700; color: #fbbf24; text-transform: uppercase;">Active Session · {active_test['test_mode']}</span>
-                <h3 style="color: white; margin: 4px 0 0 0;">Exam Drill in Progress · {total_q} Questions</h3>
-                <span style="font-size: 12px; color: #cbd5e1;">Negative Marking: -{active_test['negative_rate']} per incorrect answer</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        ui_style = active_test.get("ui_style", "Interactive OMR Palette")
+        elapsed = time.time() - active_test["start_time"]
+        target_seconds = len(q_frame) * 60
 
-        answers: Dict[int, str] = {}
-        confidences: Dict[int, str] = {}
+        # Header Bar with Live Clock & Abort Button
+        hdr1, hdr2, hdr3 = st.columns([3, 1.5, 1])
+        hdr1.subheader(f"📝 {active_test['test_mode']} · {len(q_frame)} Questions")
+        if "Timed" in active_test["test_mode"] or "Mock" in active_test["test_mode"]:
+            rem_sec = target_seconds - elapsed
+            if rem_sec > 0:
+                hdr2.metric("⏳ Remaining Time", format_duration(rem_sec))
+            else:
+                hdr2.warning(f"⏰ Overtime: +{format_duration(abs(rem_sec))}")
+        else:
+            hdr2.metric("⏱️ Elapsed Time", format_duration(elapsed))
+
+        if hdr3.button("🛑 Abort Test", use_container_width=True):
+            st.session_state["active_test"] = None
+            st.rerun()
+
+        # Mode 1: Interactive OMR Palette (One-by-One Question Navigation)
+        if ui_style == "Interactive OMR Palette":
+            answers: Dict[int, str] = active_test.setdefault("answers", {})
+            confidences: Dict[int, str] = active_test.setdefault("confidences", {})
+            marked_review: List[int] = active_test.setdefault("marked_review", [])
+            q_times: Dict[int, float] = active_test.setdefault("question_times", {})
+            curr_idx: int = int(active_test.get("current_index", 0))
+            curr_idx = max(0, min(curr_idx, len(q_frame) - 1))
+
+            row = q_frame.iloc[curr_idx]
+            qid = int(row["id"])
+
+            def update_q_timer(current_qid: int) -> None:
+                now = time.time()
+                last_ts = active_test.get("last_q_timestamp", now)
+                q_times[current_qid] = q_times.get(current_qid, 0.0) + max(0.0, now - last_ts)
+                active_test["last_q_timestamp"] = now
+
+            col_q, col_omr = st.columns([2.7, 1.3])
+
+            with col_q:
+                with st.container(border=True):
+                    q_badge = "🏛️ Official PYQ" if row.get("source_type") == "Official PYQ" else "🤖 Practice MCQ"
+                    st.caption(
+                        f"**Question {curr_idx + 1} of {len(q_frame)}** · {q_badge} · "
+                        f"`{row['subject']}` → `{row['topic']}` · Difficulty: **{row.get('difficulty', 'Medium')}** · "
+                        f"Negative Marking: `-{active_test['negative_rate']}`"
+                    )
+                    st.markdown(f"#### {row['question']}")
+
+                    opts = {
+                        "A": str(row["option_a"]),
+                        "B": str(row["option_b"]),
+                        "C": str(row["option_c"]),
+                        "D": str(row["option_d"]),
+                    }
+                    saved_ans = answers.get(qid, "-")
+                    opt_keys = ["A", "B", "C", "D"]
+                    default_idx = opt_keys.index(saved_ans) if saved_ans in opt_keys else None
+
+                    selected_val = st.radio(
+                        "Choose your answer:",
+                        options=opt_keys,
+                        format_func=lambda k: f"{k}. {opts[k]}",
+                        index=default_idx,
+                        key=f"omr_ans_{active_test['session_id']}_{qid}",
+                    )
+                    if selected_val:
+                        answers[qid] = selected_val
+
+                    c_conf, c_clr, c_rev = st.columns([2, 1, 1.2])
+                    saved_conf = confidences.get(qid, "High")
+                    conf_opts = ["High", "Medium", "Guess"]
+                    if hasattr(st, "segmented_control"):
+                        chosen_conf = c_conf.segmented_control(
+                            "Confidence Level",
+                            options=conf_opts,
+                            default=saved_conf if saved_conf in conf_opts else "High",
+                            key=f"omr_conf_{active_test['session_id']}_{qid}",
+                        )
+                    else:
+                        chosen_conf = c_conf.radio(
+                            "Confidence Level",
+                            options=conf_opts,
+                            index=conf_opts.index(saved_conf) if saved_conf in conf_opts else 0,
+                            horizontal=True,
+                            key=f"omr_conf_{active_test['session_id']}_{qid}",
+                        )
+                    confidences[qid] = chosen_conf or "Medium"
+
+                    if c_clr.button("Clear Response", key=f"clr_{qid}", use_container_width=True):
+                        answers.pop(qid, None)
+                        st.session_state.pop(f"omr_ans_{active_test['session_id']}_{qid}", None)
+                        st.rerun()
+
+                    is_marked = qid in marked_review
+                    rev_label = "🟣 Marked for Review" if is_marked else "🔖 Mark for Review"
+                    if c_rev.button(rev_label, key=f"rev_{qid}", use_container_width=True):
+                        if is_marked:
+                            marked_review.remove(qid)
+                        else:
+                            marked_review.append(qid)
+                        st.rerun()
+
+                    # Optional Instant Tutor Hint / Explanation in Learning Mode
+                    if active_test.get("instant_feedback") and answers.get(qid, "-") != "-":
+                        user_pick = answers[qid]
+                        real_cor = str(row["correct_option"]).strip()
+                        if user_pick == real_cor:
+                            st.success(f"✅ Correct! Official Answer is **{real_cor}**.")
+                        else:
+                            st.error(f"❌ Incorrect. You selected **{user_pick}**, but the correct answer is **{real_cor}**.")
+                        if row.get("explanation"):
+                            st.info(f"**Explanation:** {row['explanation']}")
+
+                # Prev / Next Navigation Bar
+                nav1, nav2, nav3 = st.columns([1, 1, 1.5])
+                if nav1.button("⬅️ Previous", disabled=(curr_idx == 0), use_container_width=True):
+                    update_q_timer(qid)
+                    active_test["current_index"] = curr_idx - 1
+                    st.rerun()
+                if nav2.button("Next ➡️", disabled=(curr_idx >= len(q_frame) - 1), use_container_width=True):
+                    update_q_timer(qid)
+                    active_test["current_index"] = curr_idx + 1
+                    st.rerun()
+                if nav3.button("✅ Submit Full Test & View Scorecard", type="primary", use_container_width=True):
+                    update_q_timer(qid)
+                    finalize_test_submission(active_test, q_frame, answers, confidences, q_times)
+                    st.rerun()
+
+            with col_omr:
+                with st.container(border=True):
+                    st.markdown("##### 🎛️ OMR Question Palette")
+                    ans_cnt = sum(1 for k in q_frame["id"].astype(int) if answers.get(k, "-") != "-")
+                    rem_cnt = len(q_frame) - ans_cnt
+                    st.caption(
+                        f"🟢 Answered: **{ans_cnt}** · ⚪ Unanswered: **{rem_cnt}** · 🟣 Review: **{len(marked_review)}**"
+                    )
+                    st.progress(ans_cnt / max(1, len(q_frame)))
+
+                    # Render 5-column OMR jump grid
+                    grid_cols = st.columns(5)
+                    for idx_btn, q_row in q_frame.iterrows():
+                        btn_qid = int(q_row["id"])
+                        has_ans = answers.get(btn_qid, "-") != "-"
+                        in_rev = btn_qid in marked_review
+                        prefix = "🟣" if in_rev else ("🟢" if has_ans else "⚪")
+                        btn_type = "primary" if idx_btn == curr_idx else "secondary"
+                        if grid_cols[idx_btn % 5].button(
+                            f"{prefix}{idx_btn + 1}",
+                            key=f"jump_{idx_btn}",
+                            type=btn_type,
+                            use_container_width=True,
+                        ):
+                            update_q_timer(qid)
+                            active_test["current_index"] = idx_btn
+                            st.rerun()
+            return
+
+        # Mode 2: Classic Full-Sheet Form Mode (All questions on a single page)
+        answers_sheet: Dict[int, str] = {}
+        confidences_sheet: Dict[int, str] = {}
 
         with st.form("active_test_form"):
             for i, row in q_frame.iterrows():
                 qid = int(row["id"])
-                is_pyq = row.get("source_type") == "Official PYQ"
-                badge_text = f"🏛️ Official PYQ ({row.get('exam_edition', '')})" if is_pyq else "🤖 Practice MCQ"
-
-                st.markdown(f"#### Question {i + 1} of {total_q}")
-                st.caption(f"{badge_text} &nbsp;|&nbsp; **Subject:** {row['subject']} &nbsp;|&nbsp; **Topic:** {row['topic']} &nbsp;|&nbsp; Difficulty: `{row['difficulty']}`")
-                st.markdown(f"**{row['question']}**")
+                st.markdown(f"**{i + 1}. {row['question']}**")
+                st.caption(f"{row['subject']} · {row['topic']} · Difficulty: {row['difficulty']}")
 
                 opts = {
                     "A": str(row["option_a"]),
@@ -970,151 +1640,193 @@ def show_practice() -> None:
                     ["High", "Medium", "Guess"],
                     key=f"conf_{qid}",
                 )
-                answers[qid] = selection or "-"
-                confidences[qid] = conf
+                answers_sheet[qid] = selection or "-"
+                confidences_sheet[qid] = conf
                 st.divider()
 
-            submitted = st.form_submit_button("Submit Test & View Full Analysis", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Submit Test & View Analysis", type="primary")
 
         if submitted:
-            time_spent = round(time.time() - active_test["start_time"], 1)
-            results_items = []
-            correct_cnt = 0
-            incorrect_cnt = 0
-            unanswered_cnt = 0
-            total_score = 0.0
+            finalize_test_submission(active_test, q_frame, answers_sheet, confidences_sheet)
+            st.rerun()
+        return
 
-            for _, row in q_frame.iterrows():
-                qid = int(row["id"])
-                chosen = answers.get(qid, "-")
-                correct = row["correct_option"]
-                is_correct = chosen == correct
-                confidence = confidences.get(qid, "Medium")
+    # -------------------------------------------------------------------------
+    # C. Configuration for Starting a New Test Session
+    # -------------------------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("Configure Custom Practice or Mock Session")
+        f1, f2, f3, f4 = st.columns(4)
+        exam = f1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="p_exam")
+        subjects = ["All"] + sorted(db.list_questions()["subject"].dropna().unique().tolist())
+        subject = f2.selectbox("Subject", subjects, key="p_subj")
+        interim = db.list_questions(exam=exam, subject=subject)
+        topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
+        topic = f3.selectbox("Topic", topics, key="p_top")
+        src_types = [
+            "All Questions",
+            "Official PYQs Only",
+            "AI Practice Sets",
+            "Starter Samples",
+            "Pinned Questions Only",
+        ]
+        src_choice = f4.selectbox("Question Provenance", src_types, key="p_src")
 
-                # Scoring calculation
-                if chosen == "-":
-                    q_score = 0.0
-                    unanswered_cnt += 1
-                elif is_correct:
-                    q_score = 1.0
-                    correct_cnt += 1
-                else:
-                    q_score = -float(active_test["negative_rate"])
-                    incorrect_cnt += 1
-                total_score += q_score
+        src_map = {
+            "All Questions": "All",
+            "Official PYQs Only": "Official PYQ",
+            "AI Practice Sets": "AI-generated",
+            "Starter Samples": "Built-in sample",
+            "Pinned Questions Only": "All",
+        }
+        matching_ids = db.get_question_ids(exam, subject, topic, source_type=src_map[src_choice])
+        if src_choice == "Pinned Questions Only":
+            matching_ids = [qid for qid in matching_ids if db.is_question_pinned(int(qid))]
 
-                # Persist to database
-                db.record_attempt(
-                    question_id=qid,
-                    selected_option=chosen,
-                    correct_option=correct,
-                    test_session_id=active_test["session_id"],
-                    time_spent_seconds=time_spent / len(q_frame),
-                    confidence_rating=confidence,
-                    score=q_score,
-                )
+        if not matching_ids:
+            st.warning("No questions match these filters. Adjust filters or generate new questions in AI Studio.")
+            return
 
-                opts = {"A": row["option_a"], "B": row["option_b"], "C": row["option_c"], "D": row["option_d"]}
-                results_items.append({
-                    "question_id": qid,
-                    "question": row["question"],
-                    "selected_option": chosen,
-                    "selected_text": opts.get(chosen, "Not answered"),
-                    "is_correct": is_correct,
-                    "correct_option": correct,
-                    "correct_text": opts.get(correct, ""),
-                    "explanation": row.get("explanation", ""),
-                    "distractor_notes": row.get("distractor_notes", ""),
-                    "subject": row["subject"],
-                    "topic": row["topic"],
-                })
+        c_cnt, c_mode, c_neg = st.columns(3)
+        count = c_cnt.slider(
+            "Questions in test",
+            min_value=1,
+            max_value=min(50, len(matching_ids)),
+            value=min(10, len(matching_ids)),
+        )
+        test_mode = c_mode.selectbox(
+            "Test Mode",
+            ["Practice (Untimed)", "Timed Drill (1 min/Q)", "Full Mock Exam"],
+        )
+        negative_rate = c_neg.selectbox(
+            "Negative Marking",
+            [0.33, 0.25, 0.0],
+            format_func=lambda x: "None (0.0)" if x == 0.0 else f"-{x} marks per wrong answer (BPSC/UPSC Standard)",
+        )
 
-            # Record session summary
-            db.record_test_session(
-                session_id=active_test["session_id"],
-                exam=active_test["exam"],
-                test_mode=active_test["test_mode"],
-                total_questions=len(q_frame),
-                correct_count=correct_cnt,
-                incorrect_count=incorrect_cnt,
-                unanswered_count=unanswered_cnt,
-                negative_mark_rate=active_test["negative_rate"],
-                total_score=total_score,
-                time_spent_seconds=time_spent,
-            )
+        u1, u2 = st.columns(2)
+        ui_style = u1.radio(
+            "Examination Interface Style",
+            ["Interactive OMR Palette", "Classic Full-Sheet Form"],
+            horizontal=True,
+        )
+        instant_fb = u2.checkbox(
+            "Enable Instant Answer & Explanation Reveal (Study Mode)",
+            value=(test_mode == "Practice (Untimed)"),
+        )
 
-            st.session_state["test_results"] = {
-                "items": results_items,
-                "total_score": total_score,
-                "time_spent": time_spent,
+        if st.button("🚀 Start Test Session", type="primary", use_container_width=True):
+            selected_ids = random.sample(matching_ids, k=count)
+            st.session_state["active_test"] = {
+                "session_id": str(uuid.uuid4())[:8],
+                "question_ids": selected_ids,
+                "exam": exam if exam != "All" else "BPSC",
+                "test_mode": test_mode,
+                "ui_style": ui_style,
+                "instant_feedback": instant_fb,
+                "negative_rate": negative_rate,
+                "start_time": time.time(),
+                "current_index": 0,
+                "answers": {},
+                "confidences": {},
+                "marked_review": [],
+                "question_times": {},
+                "last_q_timestamp": time.time(),
             }
-            st.session_state["active_test"] = None
             st.rerun()
 
 
 # -----------------------------------------------------------------------------
-# Views: 5. AI Study Tutor
+# Views: 5. AI Study Tutor (Complete Options Context Passing)
 # -----------------------------------------------------------------------------
 
 def show_ai_tutor() -> None:
-    """Conversational study tutor with pedagogical modes and mistake analysis."""
+    """Conversational study tutor with pedagogical modes and complete option-context analysis."""
     st.title("🎓 AI Study Tutor")
-    st.write("Understand core concepts, analyze mistakes, explore mnemonics, and test understanding.")
+    st.write("Master core concepts, dissect tricky distractors, generate mnemonics, and test active recall.")
 
     if not config.is_gemini_configured():
         st.warning("⚠️ Gemini API is not configured. Please add `GEMINI_API_KEY` to enable the AI Tutor.")
         return
 
-    # Check if arrived from a test mistake
     ctx_q = st.session_state.get("tutor_context_question")
     if ctx_q:
-        st.info(f"📍 Context: Analyzing your mistake on **{ctx_q['subject']} · {ctx_q['topic']}**")
+        opts_map = ctx_q.get("options") or (
+            get_question_options_map(int(ctx_q["question_id"])) if ctx_q.get("question_id") else {}
+        )
+        ctx_q["options"] = opts_map
+        with st.container(border=True):
+            c_hdr, c_detach = st.columns([4, 1])
+            c_hdr.info(f"📍 **Active Question Context:** {ctx_q.get('subject', '')} · {ctx_q.get('topic', '')}")
+            if c_detach.button("✖ Detach Question", use_container_width=True):
+                st.session_state["tutor_context_question"] = None
+                st.rerun()
+            st.markdown(f"**{ctx_q['question']}**")
+            if opts_map:
+                st.caption(
+                    f"**A.** {opts_map.get('A', '')} | **B.** {opts_map.get('B', '')} | "
+                    f"**C.** {opts_map.get('C', '')} | **D.** {opts_map.get('D', '')}"
+                )
+            st.caption(
+                f"Your Answer: `{ctx_q.get('selected_option', '-')}` · Correct Option: `{ctx_q.get('correct_option', '')}`"
+            )
 
     c_mode, c_clear = st.columns([4, 1])
     mode = c_mode.selectbox(
         "Pedagogical Mode",
         [
             "Explain my mistake",
+            "Explain why each option is right or wrong",
             "Explain from first principles",
             "Give a short BPSC exam-oriented explanation",
-            "Explain why each option is right or wrong",
-            "Give me a hint without revealing the answer",
-            "Teach using a simple example or analogy",
             "Give me a memory aid, comparison table or timeline",
             "Explain the difference between two easily confused concepts",
+            "Give me a hint without revealing the answer",
+            "Teach using a simple example or analogy",
             "Ask me follow-up questions to test understanding",
         ],
     )
-    if c_clear.button("Clear Chat"):
+    if c_clear.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state["tutor_history"] = []
         st.session_state["tutor_context_question"] = None
         st.rerun()
 
-    # User Query Input
-    user_query = st.chat_input("Ask a question, enter two concepts to compare, or request clarification...")
+    # Quick Prompt Chips
+    p1, p2, p3 = st.columns(3)
+    quick_prompt = None
+    if p1.button("🔍 Break down all 4 options (A, B, C, D)", use_container_width=True):
+        quick_prompt = "Break down each of the four options (A, B, C, and D) and explain why each distractor is right or wrong."
+    if p2.button("🧠 Give me a high-retention mnemonic / table", use_container_width=True):
+        quick_prompt = "Create a high-retention mnemonic or comparison table for this topic for BPSC Prelims revision."
+    if p3.button("🎯 Quiz me with 1 follow-up trap question", use_container_width=True):
+        quick_prompt = "Ask me one tricky statement-based follow-up question on this exact concept to test if I truly understood it."
+
+    user_query = st.chat_input("Ask a question, compare two concepts, or request a syllabus deep-dive...")
+    active_query = user_query or quick_prompt
 
     # Display Chat History
     for msg in st.session_state["tutor_history"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if user_query or (ctx_q and not st.session_state["tutor_history"]):
-        prompt_query = user_query or f"Why was my answer ({ctx_q['selected_option']}) wrong, and how do I master this?"
+    if active_query or (ctx_q and not st.session_state["tutor_history"]):
+        prompt_query = (
+            active_query
+            or f"Why was my answer ({ctx_q.get('selected_option', '-')}) wrong compared to {ctx_q.get('correct_option', '')}, and how do I master this concept?"
+        )
         st.session_state["tutor_history"].append({"role": "user", "content": prompt_query})
         with st.chat_message("user"):
             st.markdown(prompt_query)
 
         with st.chat_message("assistant"):
-            with st.spinner("AI Tutor is thinking..."):
+            with st.spinner("AI Tutor is analyzing..."):
                 try:
+                    full_options = ctx_q.get("options") if ctx_q else None
                     ans = ai_service.tutor_query(
                         mode=mode,
                         user_query=prompt_query,
                         question_text=ctx_q["question"] if ctx_q else "",
-                        options={
-                            "A": ctx_q.get("selected_text", "") if ctx_q and ctx_q.get("selected_option") == "A" else "",
-                            "B": ctx_q.get("correct_text", "") if ctx_q and ctx_q.get("correct_option") == "B" else "",
-                        } if ctx_q else None,
+                        options=full_options,
                         correct_option=ctx_q["correct_option"] if ctx_q else "",
                         selected_option=ctx_q["selected_option"] if ctx_q else "",
                         explanation=ctx_q.get("explanation", "") if ctx_q else "",
@@ -1131,9 +1843,11 @@ def show_ai_tutor() -> None:
 # -----------------------------------------------------------------------------
 
 def show_performance_coach() -> None:
-    """Diagnostic report generator that synthesizes deterministic test metrics."""
+    """Diagnostic report generator that synthesizes deterministic test metrics and confidence calibration."""
     st.title("🏆 AI Performance Coach")
-    st.caption("Evidence-based diagnostic report evaluating your real test history and error patterns.")
+    st.caption(
+        "Evidence-based diagnostic report evaluating your test history, error taxonomy, and confidence calibration."
+    )
 
     attempts = db.get_attempts()
     sessions = db.get_test_sessions()
@@ -1144,11 +1858,18 @@ def show_performance_coach() -> None:
     overall = analytics.compute_overall_metrics(attempts, sessions)
     topic_df = analytics.compute_topic_analytics(attempts)
     error_counts = analytics.compute_error_distribution(attempts)
+    calibration = compute_confidence_calibration(attempts)
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Tests Tracked", overall["total_tests"])
-    col2.metric("Total Questions Attempted", overall["total_attempts"])
+    col2.metric("Total Attempted", overall["total_attempts"])
     col3.metric("Measured Accuracy", f"{overall['accuracy']}%")
+    col4.metric("High-Conf Accuracy", f"{calibration['high_conf_accuracy']}%")
+    col5.metric("Net Guess Impact", f"{calibration['guess_net_score']:+0.2f}")
+
+    if not calibration["breakdown"].empty:
+        with st.expander("🧠 View Metacognitive Confidence Calibration Matrix", expanded=True):
+            st.dataframe(calibration["breakdown"], use_container_width=True, hide_index=True)
 
     if st.button("🔍 Generate AI Diagnostic Report", type="primary"):
         with st.spinner("Performance Coach is evaluating test data..."):
@@ -1159,6 +1880,8 @@ def show_performance_coach() -> None:
                     "total_tests": overall["total_tests"],
                     "topic_stats": topic_df.head(8).to_dict("records"),
                     "error_counts": error_counts,
+                    "high_confidence_blind_spots": calibration["blind_spots"],
+                    "guess_net_score": calibration["guess_net_score"],
                 }
                 recent_incorrect = attempts[attempts["is_correct"] == 0].head(10).to_dict("records")
                 report: schemas.DiagnosticReport = ai_service.generate_performance_coach_report(
@@ -1169,11 +1892,10 @@ def show_performance_coach() -> None:
             except Exception as exc:
                 st.error(f"Coach error: {exc}")
 
-    # Display Report
     saved_report = st.session_state.get("coach_report")
     if saved_report:
         st.divider()
-        st.subheader("📋 Diagnostic Summary")
+        st.subheader("📋 Executive Diagnostic Summary")
         st.write(saved_report["test_summary"])
 
         c_str, c_wk = st.columns(2)
@@ -1195,103 +1917,221 @@ def show_performance_coach() -> None:
 
 
 # -----------------------------------------------------------------------------
-# Views: 7. Error Notebook
+# Views: 7. Error Notebook & Pinned Vault
 # -----------------------------------------------------------------------------
 
 def show_error_notebook() -> None:
-    """Persistent mistake diagnosis and question pinning system."""
-    st.title("📕 Error Notebook")
-    st.write("Track every incorrect answer, understand root causes, and pin tricky questions for revision.")
+    """Persistent mistake diagnosis, error pattern analytics, and pinned question revision vault."""
+    st.title("📕 Error Notebook & Revision Vault")
+    st.write(
+        "Diagnose every incorrect attempt with full option context, classify root causes, and drill your Pinned Questions Vault."
+    )
 
     attempts = db.get_attempts()
-    if attempts.empty:
-        st.info("No test attempts recorded yet. Mistakes from tests will appear here automatically.")
-        return
+    pinned_df = get_pinned_questions_df()
 
-    incorrect = attempts[attempts["is_correct"] == 0].copy()
-    if incorrect.empty:
-        st.success("🎉 No incorrect attempts recorded so far! Keep practising to test your knowledge.")
-        return
+    tab_mistakes, tab_pinned, tab_patterns = st.tabs([
+        f"❌ Incorrect Attempts ({len(attempts[attempts['is_correct'] == 0]) if not attempts.empty else 0})",
+        f"📌 Pinned Questions Vault ({len(pinned_df)})",
+        "📊 Error Taxonomy & Patterns",
+    ])
 
-    # Mistake Drill Action
-    c_hdr1, c_hdr2 = st.columns([3, 1])
-    c_hdr1.metric("Total Recorded Mistakes", len(incorrect))
-    if c_hdr2.button("🎯 Practice My Mistakes", type="primary", use_container_width=True):
-        missed_ids = list(incorrect["question_id"].unique())
-        selected_ids = random.sample(missed_ids, k=min(10, len(missed_ids)))
-        st.session_state["active_test"] = {
-            "session_id": str(uuid.uuid4())[:8],
-            "question_ids": selected_ids,
-            "exam": "BPSC",
-            "test_mode": "Mistake Remediation Drill",
-            "negative_rate": 0.0,
-            "start_time": time.time(),
-        }
-        st.session_state["nav_page"] = "Practice & Mock Tests"
-        st.rerun()
+    # ---------------------------------------------------------
+    # TAB 1: Incorrect Attempts & AI Mistake Diagnosis
+    # ---------------------------------------------------------
+    with tab_mistakes:
+        if attempts.empty:
+            st.info("No test attempts recorded yet. Mistakes from tests will appear here automatically.")
+        else:
+            incorrect = attempts[attempts["is_correct"] == 0].copy()
+            if incorrect.empty:
+                st.success("🎉 Zero incorrect attempts recorded so far!")
+            else:
+                c_hdr1, c_hdr2, c_hdr3 = st.columns([2, 1.5, 1.5])
+                c_hdr1.metric("Total Recorded Mistakes", len(incorrect))
+                unclassified_cnt = int((incorrect["error_type"] == "Unclassified").sum())
+                c_hdr2.metric("Unclassified Mistakes", unclassified_cnt)
 
-    st.divider()
+                if c_hdr3.button("🎯 Practice My Mistakes", type="primary", use_container_width=True):
+                    missed_ids = [int(x) for x in incorrect["question_id"].unique()]
+                    selected_ids = random.sample(missed_ids, k=min(10, len(missed_ids)))
+                    st.session_state["active_test"] = {
+                        "session_id": str(uuid.uuid4())[:8],
+                        "question_ids": selected_ids,
+                        "exam": "BPSC",
+                        "test_mode": "Mistake Remediation Drill",
+                        "ui_style": "Interactive OMR Palette",
+                        "instant_feedback": True,
+                        "negative_rate": 0.33,
+                        "start_time": time.time(),
+                        "current_index": 0,
+                        "answers": {},
+                        "confidences": {},
+                        "marked_review": [],
+                        "question_times": {},
+                        "last_q_timestamp": time.time(),
+                    }
+                    st.session_state["test_results"] = None
+                    navigate_to("Practice & Mock Tests")
 
-    # Filter by Error Classification
-    f_col1, f_col2 = st.columns(2)
-    err_filter = f_col1.selectbox("Filter by Mistake Reason", ["All"] + db.ERROR_TYPES)
-    filtered = incorrect
-    if err_filter != "All":
-        filtered = filtered[filtered["error_type"] == err_filter]
+                st.divider()
 
-    st.caption(f"Showing {len(filtered)} mistake(s).")
+                f_col1, f_col2 = st.columns(2)
+                err_filter = f_col1.selectbox("Filter by Mistake Reason", ["All"] + db.ERROR_TYPES)
+                subj_choices = ["All"] + sorted(incorrect["subject"].dropna().unique().tolist())
+                subj_filter = f_col2.selectbox("Filter by Subject", subj_choices)
 
-    for _, row in filtered.head(25).iterrows():
-        att_id = int(row["attempt_id"])
-        qid = int(row["question_id"])
-        is_pinned = db.is_question_pinned(qid)
+                filtered = incorrect
+                if err_filter != "All":
+                    filtered = filtered[filtered["error_type"] == err_filter]
+                if subj_filter != "All":
+                    filtered = filtered[filtered["subject"] == subj_filter]
 
-        pin_label = "📌 Pinned" if is_pinned else "📍 Pin for Revision"
-        with st.expander(f"{row['subject']} · {row['topic']} · {row['attempted_at'][:16]}", expanded=(row["error_type"] == "Unclassified")):
-            st.markdown(f"**Question:** {row['question']}")
-            ans_display = "Not answered" if row["selected_option"] == "-" else row["selected_option"]
-            st.write(f"**Your Answer:** {ans_display} · **Correct Answer:** {row['correct_option']}")
-            if row.get("explanation"):
-                st.info(f"**Explanation:** {row['explanation']}")
+                st.caption(f"Showing {len(filtered)} mistake(s).")
 
-            ec1, ec2 = st.columns([1, 2])
-            current_err_idx = db.ERROR_TYPES.index(row["error_type"]) if row["error_type"] in db.ERROR_TYPES else 0
-            err_type = ec1.selectbox("Classify Mistake", db.ERROR_TYPES, index=current_err_idx, key=f"nb_err_{att_id}")
-            err_note = ec2.text_input("Personal Study Note", value=str(row["error_notes"] or ""), key=f"nb_note_{att_id}")
+                for _, row in filtered.head(25).iterrows():
+                    att_id = int(row["attempt_id"])
+                    qid = int(row["question_id"])
+                    is_pinned = db.is_question_pinned(qid)
+                    opts_map = get_question_options_map(qid)
 
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            if btn_col1.button("Save Classification", key=f"save_err_{att_id}"):
-                db.save_error_classification(att_id, err_type, err_note)
-                st.success("Classification saved!")
-                st.rerun()
-
-            if btn_col2.button(pin_label, key=f"pin_{att_id}"):
-                if is_pinned:
-                    db.unpin_question(qid)
-                    st.info("Unpinned question.")
-                else:
-                    db.pin_question(qid, note=err_note)
-                    st.success("Question pinned to notebook!")
-                st.rerun()
-
-            if config.is_gemini_configured() and btn_col3.button("🤖 Diagnose with AI", key=f"ai_diag_{att_id}"):
-                with st.spinner("Diagnosing mistake..."):
-                    try:
-                        diag = ai_service.diagnose_mistake(
-                            question_text=row["question"],
-                            options={"A": "", "B": "", "C": "", "D": ""},
-                            correct_option=row["correct_option"],
-                            selected_option=row["selected_option"],
-                            explanation=row.get("explanation", ""),
-                            subject=row["subject"],
-                            topic=row["topic"],
+                    pin_label = "📌 Unpin" if is_pinned else "📍 Pin for Revision"
+                    conf_str = f" · Confidence: {row.get('confidence_rating', 'Medium')}" if "confidence_rating" in row else ""
+                    with st.expander(
+                        f"[{row['error_type']}] {row['subject']} · {row['topic']} ({row['attempted_at'][:16]}{conf_str})",
+                        expanded=(row["error_type"] == "Unclassified"),
+                    ):
+                        st.markdown(f"**Question:** {row['question']}")
+                        if any(opts_map.values()):
+                            st.caption(
+                                f"**A.** {opts_map.get('A', '')} | **B.** {opts_map.get('B', '')} | "
+                                f"**C.** {opts_map.get('C', '')} | **D.** {opts_map.get('D', '')}"
+                            )
+                        ans_display = (
+                            "Not answered"
+                            if row["selected_option"] == "-"
+                            else f"{row['selected_option']} ({opts_map.get(row['selected_option'], '')})"
                         )
-                        st.markdown(f"**AI Diagnosis:** {diag.diagnosis}")
-                        st.markdown(f"**Core Concept:** {diag.concept_recap}")
-                        st.markdown(f"**Next Action:** {diag.next_step_action}")
-                        db.save_error_classification(att_id, diag.suggested_error_type, diag.next_step_action)
-                    except Exception as exc:
-                        st.error(f"Diagnosis failed: {exc}")
+                        cor_display = f"{row['correct_option']} ({opts_map.get(row['correct_option'], '')})"
+                        st.write(f"**Your Answer:** {ans_display} · **Correct Answer:** {cor_display}")
+                        if row.get("explanation"):
+                            st.info(f"**Explanation:** {row['explanation']}")
+
+                        ec1, ec2 = st.columns([1, 2])
+                        current_err_idx = (
+                            db.ERROR_TYPES.index(row["error_type"])
+                            if row["error_type"] in db.ERROR_TYPES
+                            else 0
+                        )
+                        err_type = ec1.selectbox(
+                            "Classify Mistake",
+                            db.ERROR_TYPES,
+                            index=current_err_idx,
+                            key=f"nb_err_{att_id}",
+                        )
+                        err_note = ec2.text_input(
+                            "Personal Study Note",
+                            value=str(row["error_notes"] or ""),
+                            key=f"nb_note_{att_id}",
+                        )
+
+                        btn_col1, btn_col2, btn_col3 = st.columns(3)
+                        if btn_col1.button("💾 Save Classification", key=f"save_err_{att_id}", use_container_width=True):
+                            db.save_error_classification(att_id, err_type, err_note)
+                            st.success("Classification saved!")
+                            st.rerun()
+
+                        if btn_col2.button(pin_label, key=f"pin_{att_id}", use_container_width=True):
+                            if is_pinned:
+                                db.unpin_question(qid)
+                            else:
+                                db.pin_question(qid, note=err_note)
+                            st.rerun()
+
+                        if config.is_gemini_configured() and btn_col3.button(
+                            "🤖 Diagnose with AI", key=f"ai_diag_{att_id}", use_container_width=True
+                        ):
+                            with st.spinner("Diagnosing mistake with full option context..."):
+                                try:
+                                    diag = ai_service.diagnose_mistake(
+                                        question_text=row["question"],
+                                        options=opts_map,
+                                        correct_option=row["correct_option"],
+                                        selected_option=row["selected_option"],
+                                        explanation=row.get("explanation", ""),
+                                        subject=row["subject"],
+                                        topic=row["topic"],
+                                    )
+                                    st.markdown(f"**AI Diagnosis:** {diag.diagnosis}")
+                                    st.markdown(f"**Core Concept Recap:** {diag.concept_recap}")
+                                    st.markdown(f"**Next Action:** {diag.next_step_action}")
+                                    db.save_error_classification(
+                                        att_id, diag.suggested_error_type, diag.next_step_action
+                                    )
+                                except Exception as exc:
+                                    st.error(f"Diagnosis failed: {exc}")
+
+    # ---------------------------------------------------------
+    # TAB 2: Pinned Questions Vault
+    # ---------------------------------------------------------
+    with tab_pinned:
+        if pinned_df.empty:
+            st.info(
+                "No questions are currently pinned. Pin tricky questions from the Question Bank, Test Scorecard, or Error Notebook to build your high-priority revision vault."
+            )
+        else:
+            p_hdr1, p_hdr2 = st.columns([3, 1])
+            p_hdr1.write(f"You have **{len(pinned_df)}** pinned question(s) ready for rapid revision.")
+            if p_hdr2.button("🚀 Drill Pinned Vault", type="primary", use_container_width=True):
+                p_ids = pinned_df["id"].astype(int).tolist()
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": p_ids[:25],
+                    "exam": "BPSC",
+                    "test_mode": "Pinned Vault Revision Drill",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": True,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+            for _, prow in pinned_df.iterrows():
+                pqid = int(prow["id"])
+                with st.container(border=True):
+                    st.markdown(f"#### Q.#{pqid} ({prow['subject']} · {prow['topic']}): {prow['question']}")
+                    st.write(
+                        f"- **A.** {prow['option_a']}\n"
+                        f"- **B.** {prow['option_b']}\n"
+                        f"- **C.** {prow['option_c']}\n"
+                        f"- **D.** {prow['option_d']}"
+                    )
+                    with st.expander("Show Answer & Explanation"):
+                        st.success(f"**Correct Option:** `{prow['correct_option']}`")
+                        st.write(prow.get("explanation", ""))
+                    if st.button("📌 Unpin from Vault", key=f"vault_unpin_{pqid}"):
+                        db.unpin_question(pqid)
+                        st.rerun()
+
+    # ---------------------------------------------------------
+    # TAB 3: Error Taxonomy & Patterns
+    # ---------------------------------------------------------
+    with tab_patterns:
+        if attempts.empty or attempts[attempts["is_correct"] == 0].empty:
+            st.info("Record and classify mistakes to see your error taxonomy distribution.")
+        else:
+            err_dist = analytics.compute_error_distribution(attempts)
+            err_rows = [{"Error Type": k, "Count": v} for k, v in err_dist.items() if v > 0]
+            if err_rows:
+                st.subheader("Mistake Root-Cause Distribution")
+                st.dataframe(pd.DataFrame(err_rows), use_container_width=True, hide_index=True)
 
 
 # -----------------------------------------------------------------------------
@@ -1299,22 +2139,25 @@ def show_error_notebook() -> None:
 # -----------------------------------------------------------------------------
 
 def show_revision_planner() -> None:
-    """Adaptive 7-day revision schedule with spaced repetition intervals."""
+    """Adaptive 7-day revision schedule with spaced repetition intervals and direct drill triggers."""
     st.title("📅 Adaptive Revision Planner")
-    st.write("Evidence-driven study plan based on accuracy, error recurrence, and interval spacing.")
+    st.write("Evidence-driven 7-day study schedule based on accuracy, error recurrence, and spaced repetition.")
 
     attempts = db.get_attempts()
     topic_stats = db.get_topic_stats()
 
-    # Target Exam Configuration
     with st.container(border=True):
         st.subheader("Configure Target Exam & Study Rhythm")
         c1, c2, c3 = st.columns(3)
         exam_target_date = c1.date_input("Target Exam Date", value=date.today() + timedelta(days=90))
-        daily_minutes = c2.slider("Daily Revision Budget (minutes)", min_value=30, max_value=240, value=90, step=15)
+        daily_minutes = c2.slider(
+            "Daily Revision Budget (minutes)", min_value=30, max_value=240, value=90, step=15
+        )
         preferred_subj = c3.multiselect("Focus Subjects (Optional)", db.SUBJECTS, default=[])
 
-    # Retention Metric Check
+    days_left = (exam_target_date - date.today()).days
+    st.caption(f"⏳ **{max(0, days_left)} days** remaining until target examination date ({exam_target_date}).")
+
     retention = analytics.measure_revision_outcome(attempts)
     if retention["retried_topics_count"] > 0:
         st.success(
@@ -1322,7 +2165,6 @@ def show_revision_planner() -> None:
             f"**{retention['average_gain']:+0.1f}%** across {retention['retried_topics_count']} topics!"
         )
 
-    # Generate Adaptive Plan
     plan = revision_engine.generate_adaptive_weekly_plan(
         stats=topic_stats,
         attempts=attempts,
@@ -1331,16 +2173,46 @@ def show_revision_planner() -> None:
         preferred_subjects=preferred_subj,
     )
 
-    st.subheader("7-Day Revision Schedule")
-    for item in plan:
+    st.subheader("7-Day Adaptive Schedule")
+    for idx, item in enumerate(plan):
         with st.container(border=True):
-            st.markdown(f"### {item['day']} ({item['date']}) · {item['subject']}: {item['topic']}")
-            st.write(item["task"])
-            col_meta1, col_meta2 = st.columns([3, 1])
-            col_meta1.caption(f"**Rationale:** {item['basis']}")
-            col_meta2.caption(f"⏱️ Est: {item['estimated_minutes']} mins")
+            r_left, r_right = st.columns([3.5, 1])
+            with r_left:
+                st.markdown(f"### {item['day']} ({item['date']}) · {item['subject']}: {item['topic']}")
+                st.write(item["task"])
+                st.caption(f"**Rationale:** {item['basis']} · ⏱️ Est: **{item['estimated_minutes']} mins**")
+            with r_right:
+                matching_ids = db.get_question_ids(
+                    exam="All", subject=item["subject"], topic=item["topic"]
+                )
+                if not matching_ids:
+                    matching_ids = db.get_question_ids(exam="All", subject=item["subject"], topic="All")
+                if matching_ids:
+                    if st.button(
+                        f"🎯 Drill {item['subject']}",
+                        key=f"rev_drill_{idx}",
+                        use_container_width=True,
+                    ):
+                        chosen = random.sample(matching_ids, k=min(10, len(matching_ids)))
+                        st.session_state["active_test"] = {
+                            "session_id": str(uuid.uuid4())[:8],
+                            "question_ids": chosen,
+                            "exam": "BPSC",
+                            "test_mode": f"Revision Drill: {item['topic']}",
+                            "ui_style": "Interactive OMR Palette",
+                            "instant_feedback": True,
+                            "negative_rate": 0.33,
+                            "start_time": time.time(),
+                            "current_index": 0,
+                            "answers": {},
+                            "confidences": {},
+                            "marked_review": [],
+                            "question_times": {},
+                            "last_q_timestamp": time.time(),
+                        }
+                        st.session_state["test_results"] = None
+                        navigate_to("Practice & Mock Tests")
 
-    # Export Plan
     plan_df = pd.DataFrame(plan)
     csv_bytes = plan_df.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -1418,36 +2290,37 @@ CURATED_CURRENT_AFFAIRS_CAPSULES = [
         ],
     },
     {
-        "title": "🐅 Wildlife & Environment: Valmiki & Proposed Kaimur Tiger Reserve",
+        "title": "🐅 Wildlife & Environment: Valmiki & Kaimur Tiger Reserve + Nagi-Nakti Ramsar Sites",
         "category": "Environment & Biodiversity",
-        "topic": "Valmiki & Kaimur Tiger Reserves",
-        "summary": "Valmiki National Park & Tiger Reserve in West Champaran is currently the only declared tiger reserve in Bihar, reporting a rising tiger population (54 tigers in recent census). In 2023-2024, the state government constituted a Rhino Task Force to reintroduce one-horned rhinoceroses in Valmiki Tiger Reserve under the National Rhino Conservation Strategy. Additionally, the National Tiger Conservation Authority (NTCA) approved Kaimur Wildlife Sanctuary to be declared Bihar's second tiger reserve.",
+        "topic": "Valmiki & Kaimur Tiger Reserves and Bihar Ramsar Sites",
+        "summary": "Valmiki National Park & Tiger Reserve in West Champaran is Bihar's first tiger reserve (54 tigers). The NTCA approved Kaimur Wildlife Sanctuary as Bihar's second tiger reserve. Furthermore, in 2024, Nagi and Nakti Bird Sanctuaries in Jamui district were designated as Ramsar Sites of International Importance, joining Kabartal (Kanwar Lake) in Begusarai to bring Bihar's total Ramsar wetlands count to 3.",
         "key_facts": [
             "Valmiki Tiger Reserve: West Champaran, contiguous with Chitwan National Park (Nepal).",
-            "Second Tiger Reserve: Proposed in Kaimur Wildlife Sanctuary (spanning Kaimur & Rohtas).",
-            "Rhino Task Force: Set up to reintroduce rhinos in VTR.",
-            "Gharial breeding sanctuary: Gandak River stretch in Bihar.",
+            "Second Tiger Reserve: Approved in Kaimur Wildlife Sanctuary (Kaimur & Rohtas).",
+            "Bihar Ramsar Sites (Total 3): Kabartal (Begusarai, 2020), Nagi Bird Sanctuary & Nakti Bird Sanctuary (Jamui, 2024).",
+            "National Dolphin Research Centre (NDRC): Inaugurated in Patna (2024).",
         ],
     },
 ]
 
 
 def show_current_affairs() -> None:
-    """Dedicated Current Affairs Hub: Instant MCQ generation, real-time research, and high-yield BPSC capsules."""
+    """Dedicated Current Affairs Hub: Instant MCQ generation, live grounded research, capsules, and saved vault."""
     st.title("📰 Current Affairs & News Lab")
     st.write(
         "Master high-yield National, International, and Bihar Current Affairs for BPSC CCE and UPSC Prelims. "
-        "Generate multi-statement practice MCQs, synthesize live policy developments with Google search grounding, and revise high-yield capsules."
+        "Generate multi-statement practice MCQs, synthesize live policy developments with Google Search grounding, and manage your Research Vault."
     )
 
     if not config.is_gemini_configured():
         st.warning("⚠️ Gemini API is not configured. Please add `GEMINI_API_KEY` to enable current affairs synthesis.")
         return
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "⚡ Instant Current Affairs MCQs",
         "🔍 Live Policy & Topic Research",
         "📌 High-Yield BPSC Capsules",
+        "🗂️ Saved Research Vault",
     ])
 
     # ---------------------------------------------------------
@@ -1482,12 +2355,17 @@ def show_current_affairs() -> None:
 
         c_ca4, c_ca5 = st.columns(2)
         ca_diff = c_ca4.selectbox("Difficulty", ["Medium", "Hard"], index=0, key="ca_diff_select")
-        ca_timeframe = c_ca5.selectbox("Timeframe Focus", ["Last 6 Months (BPSC High-Yield)", "Last 1 Year", "Recent State Initiatives"], key="ca_time_select")
+        ca_timeframe = c_ca5.selectbox(
+            "Timeframe Focus",
+            ["Last 6 Months (BPSC High-Yield)", "Last 1 Year", "Recent State Initiatives"],
+            key="ca_time_select",
+        )
 
-        # Show available official PYQ exemplars
         ca_exemplars = db.retrieve_pyq_exemplars(subject="Current Affairs", topic=ca_category[:20], limit=2)
         if ca_exemplars:
-            st.caption(f"🏛️ Strict BPSC Benchmark Active: Will calibrate against {len(ca_exemplars)} genuine Current Affairs PYQs from 68th/69th BPSC Prelims.")
+            st.caption(
+                f"🏛️ Strict BPSC Benchmark Active: Will calibrate against {len(ca_exemplars)} genuine Current Affairs PYQs."
+            )
 
         if st.button("⚡ Generate Current Affairs Questions", type="primary", key="btn_gen_ca"):
             with st.spinner("Generating authenticated Current Affairs questions..."):
@@ -1507,7 +2385,7 @@ def show_current_affairs() -> None:
                         difficulty=ca_diff,
                         question_type=ca_qtype,
                         focus="Tricky distractor elimination",
-                        notes_or_context=f"Focus on recent verified civil services developments relevant for BPSC Prelims: {ca_timeframe}.",
+                        notes_or_context=f"Focus on verified civil services developments relevant for BPSC Prelims: {ca_timeframe}.",
                     )
                     st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
                     st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
@@ -1515,7 +2393,6 @@ def show_current_affairs() -> None:
                 except Exception as exc:
                     st.error(f"Generation failed: {exc}")
 
-        # Render generated CA questions
         ca_items = st.session_state.get("ca_questions")
         if ca_items:
             st.divider()
@@ -1525,17 +2402,33 @@ def show_current_affairs() -> None:
 
             for idx, q in enumerate(ca_items):
                 with st.expander(f"Question #{idx+1}: {q['question'][:80]}...", expanded=True):
-                    q_text = st.text_area(f"Question Statement", value=q["question"], key=f"ca_sq_text_{ca_gen_id}_{idx}")
+                    q_text = st.text_area(
+                        "Question Statement", value=q["question"], key=f"ca_sq_text_{ca_gen_id}_{idx}"
+                    )
                     co1, co2 = st.columns(2)
                     oa = co1.text_input("Option A", value=q["option_a"], key=f"ca_sq_oa_{ca_gen_id}_{idx}")
                     ob = co2.text_input("Option B", value=q["option_b"], key=f"ca_sq_ob_{ca_gen_id}_{idx}")
                     oc = co1.text_input("Option C", value=q["option_c"], key=f"ca_sq_oc_{ca_gen_id}_{idx}")
                     od = co2.text_input("Option D", value=q["option_d"], key=f"ca_sq_od_{ca_gen_id}_{idx}")
 
-                    curr_idx = ["A", "B", "C", "D"].index(q["correct_option"]) if q["correct_option"] in ["A", "B", "C", "D"] else 0
-                    cor_opt = st.radio("Correct Answer", ["A", "B", "C", "D"], index=curr_idx, horizontal=True, key=f"ca_sq_cor_{ca_gen_id}_{idx}")
-                    exp = st.text_area("Explanation", value=q.get("explanation", ""), key=f"ca_sq_exp_{ca_gen_id}_{idx}")
-                    dist = st.text_input("Distractor Notes", value=q.get("distractor_notes", ""), key=f"ca_sq_dist_{ca_gen_id}_{idx}")
+                    curr_idx = (
+                        ["A", "B", "C", "D"].index(q["correct_option"])
+                        if q["correct_option"] in ["A", "B", "C", "D"]
+                        else 0
+                    )
+                    cor_opt = st.radio(
+                        "Correct Answer",
+                        ["A", "B", "C", "D"],
+                        index=curr_idx,
+                        horizontal=True,
+                        key=f"ca_sq_cor_{ca_gen_id}_{idx}",
+                    )
+                    exp = st.text_area(
+                        "Explanation", value=q.get("explanation", ""), key=f"ca_sq_exp_{ca_gen_id}_{idx}"
+                    )
+                    dist = st.text_input(
+                        "Distractor Notes", value=q.get("distractor_notes", ""), key=f"ca_sq_dist_{ca_gen_id}_{idx}"
+                    )
 
                     ca_to_save.append({
                         "exam": "BPSC",
@@ -1561,11 +2454,9 @@ def show_current_affairs() -> None:
 
             col_s, col_d = st.columns([2, 1])
             if col_s.button("💾 Save All to Question Bank", type="primary", key="save_ca_bank"):
-                cnt = 0
                 for item in ca_to_save:
                     db.add_question(item)
-                    cnt += 1
-                st.success(f"Saved {cnt} Current Affairs questions to your Question Bank!")
+                st.success(f"Saved {len(ca_to_save)} Current Affairs questions to your Question Bank!")
                 st.session_state["ca_questions"] = None
                 for k in list(st.session_state.keys()):
                     if k.startswith("ca_sq_"):
@@ -1584,7 +2475,9 @@ def show_current_affairs() -> None:
     # ---------------------------------------------------------
     with tab2:
         st.subheader("Live Policy Research with Google Search Grounding")
-        st.write("Research any recent government announcement, scheme, or event to get high-yield exam points with verified source citations.")
+        st.write(
+            "Research any recent government announcement, scheme, or economic survey highlight to get exam-ready points with source citations."
+        )
 
         col_rq1, col_rq2 = st.columns([3, 1])
         q_text = col_rq1.text_input(
@@ -1621,7 +2514,7 @@ def show_current_affairs() -> None:
                     st.markdown(f"- [{c['title']}]({c['url']})")
 
             c_save, c_gen = st.columns(2)
-            if c_save.button("💾 Save Research Notes", key="save_res_btn"):
+            if c_save.button("💾 Save to Research Vault", key="save_res_btn"):
                 db.save_research_note(
                     topic=res["topic"],
                     title=res["topic"],
@@ -1629,7 +2522,7 @@ def show_current_affairs() -> None:
                     key_facts=[],
                     bihar_angle="Included" if bihar_angle else "",
                 )
-                st.success("Saved to Research Notes!")
+                st.success("Saved to Research Vault! View anytime under the 'Saved Research Vault' tab.")
 
             if c_gen.button("✨ Generate 3 MCQs from this Research", key="gen_from_res_btn"):
                 with st.spinner("Generating exam MCQs from research notes..."):
@@ -1647,16 +2540,18 @@ def show_current_affairs() -> None:
                         )
                         st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
                         st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
-                        st.success("Generated 3 questions! Check the 'Instant Current Affairs MCQs' tab to review and save them.")
+                        st.success(
+                            "Generated 3 questions! Check the 'Instant Current Affairs MCQs' tab to review and save them."
+                        )
                     except Exception as exc:
                         st.error(f"Generation error: {exc}")
 
     # ---------------------------------------------------------
-    # TAB 3: High-Yield BPSC Capsules (Ready Bank)
+    # TAB 3: High-Yield BPSC Capsules
     # ---------------------------------------------------------
     with tab3:
         st.subheader("High-Yield BPSC Current Affairs Capsules")
-        st.write("Curated, syllabus-linked facts on the highest-yield topics for the upcoming 71st BPSC CCE Prelims.")
+        st.write("Curated, syllabus-linked facts on the highest-yield topics for BPSC CCE Prelims.")
 
         for cap in CURATED_CURRENT_AFFAIRS_CAPSULES:
             with st.expander(f"{cap['title']} · *{cap['category']}*", expanded=False):
@@ -1682,9 +2577,54 @@ def show_current_affairs() -> None:
                             )
                             st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
                             st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
-                            st.success(f"Generated 3 questions on {cap['topic']}! Switch to 'Instant Current Affairs MCQs' tab to review and save.")
+                            st.success(
+                                f"Generated 3 questions on {cap['topic']}! Switch to 'Instant Current Affairs MCQs' tab to review and save."
+                            )
                         except Exception as exc:
                             st.error(f"Generation error: {exc}")
+
+    # ---------------------------------------------------------
+    # TAB 4: Saved Research Vault
+    # ---------------------------------------------------------
+    with tab4:
+        st.subheader("🗂️ Saved Research Notes Vault")
+        notes_df = get_saved_research_notes()
+        if notes_df.empty:
+            st.info(
+                "No saved research notes yet. Use the 'Live Policy & Topic Research' tab to research topics and save them here."
+            )
+        else:
+            st.caption(f"Stored Research Dossiers: **{len(notes_df)}**")
+            for idx, nrow in notes_df.iterrows():
+                ntitle = nrow.get("title") or nrow.get("topic") or f"Research Note #{idx+1}"
+                nsummary = nrow.get("summary", "")
+                created = str(nrow.get("created_at", ""))[:16]
+                with st.expander(f"📄 {ntitle} ({created})", expanded=False):
+                    st.markdown(nsummary)
+                    if st.button(
+                        f"✨ Generate 3 MCQs from '{ntitle[:35]}'",
+                        key=f"vault_gen_{idx}",
+                    ):
+                        with st.spinner("Generating questions from saved research note..."):
+                            try:
+                                q_set = ai_service.generate_question_set(
+                                    exam="BPSC",
+                                    subject="Current Affairs",
+                                    topic=ntitle,
+                                    subtopic="Saved Research Vault",
+                                    count=3,
+                                    difficulty="Medium",
+                                    question_type="Statement-based (1 and 2 only, etc.)",
+                                    focus="PYQ-inspired practice",
+                                    notes_or_context=nsummary,
+                                )
+                                st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
+                                st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
+                                st.success(
+                                    "Generated 3 questions! Switch to the 'Instant Current Affairs MCQs' tab to review and save."
+                                )
+                            except Exception as exc:
+                                st.error(f"Generation error: {exc}")
 
 
 # -----------------------------------------------------------------------------
@@ -1692,17 +2632,17 @@ def show_current_affairs() -> None:
 # -----------------------------------------------------------------------------
 
 def show_settings() -> None:
-    """Authentication, API key status, cloud synchronization, and local backups."""
+    """Manage API keys, check model health, cloud sync with Supabase, and export backups."""
     st.title("⚙️ Settings & Data Management")
+    st.write("Configure external services, test Google Gemini SDK connectivity, and backup your local database.")
 
-    # API Configuration Status
-    st.subheader("1. AI Service Configuration")
+    # 1. Gemini AI API Configuration Status
+    st.subheader("1. Google Gemini AI Engine")
     key = config.get_gemini_api_key()
     c_s1, c_s2 = st.columns(2)
     c_s1.write(f"**Gemini API Key:** `{config.mask_secret(key)}`")
     c_s2.write(f"**Active Model:** `{config.get_gemini_model()}`")
 
-    # On-demand connection tester (only triggers on explicit user click)
     col_t1, col_t2 = st.columns([1, 2])
     if col_t1.button("🔌 Test Gemini Connection", type="primary"):
         with st.spinner("Testing API connection..."):
@@ -1725,7 +2665,7 @@ def show_settings() -> None:
 
     st.divider()
 
-    # Supabase Cloud Authentication & Migration
+    # 2. Supabase Cloud Sync
     st.subheader("2. Supabase Cloud Sync")
     if config.is_supabase_configured():
         user = st.session_state.get("authenticated_user")
@@ -1775,7 +2715,7 @@ def show_settings() -> None:
 
     st.divider()
 
-    # Local SQLite Backup
+    # 3. Local SQLite Backup
     st.subheader("3. Local Data Backup & Export")
     st.write("Create a full JSON snapshot of all questions, attempts, test sessions, and notebook notes.")
     json_data = db.export_sqlite_to_json()
@@ -1793,7 +2733,7 @@ def show_settings() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="BPSC Question Lab v1.0",
+        page_title="BPSC Question Lab v2.0",
         page_icon="📚",
         layout="wide",
         initial_sidebar_state="expanded",
@@ -1813,31 +2753,23 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    pages = [
-        "Dashboard",
-        "Question Bank",
-        "AI Question Studio",
-        "Current Affairs Lab",
-        "Practice & Mock Tests",
-        "AI Study Tutor",
-        "AI Performance Coach",
-        "Error Notebook",
-        "Revision Planner",
-        "Settings & Data",
-    ]
-
     # Handle programmatic redirects
     default_page = st.session_state.get("nav_page", "Dashboard")
-    if default_page not in pages:
+    if default_page not in NAV_PAGES:
         default_page = "Dashboard"
 
-    selected_page = st.sidebar.radio("Navigate", pages, index=pages.index(default_page))
+    selected_page = st.sidebar.radio(
+        "Navigate",
+        NAV_PAGES,
+        index=NAV_PAGES.index(default_page),
+        key="_nav_radio_widget",
+    )
     st.session_state["nav_page"] = selected_page
 
     st.sidebar.markdown(
         """
         <div class="sidebar-target-box">
-            <b style="color: #1e3a8a;">🎯 Target: 71st BPSC Prelims</b><br>
+            <b style="color: #1e3a8a;">🎯 Target: 71st / 72nd BPSC Prelims</b><br>
             <span style="font-size: 12px; color: #475569;">
             • 150 MCQs · 120 Mins · Negative: -0.33<br>
             • Focus: Bihar History, Geography, Polity, Science, Current Affairs

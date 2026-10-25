@@ -1,54 +1,41 @@
-# BPSC Question Lab · Version 1.0.0
+# BPSC Question Lab · Version 2.0.0
 
 An AI-powered, personal examination laboratory for **BPSC Combined Competitive Exam (CCE)** and **UPSC Civil Services Prelims**.
 
-Combines official Google Gemini generative AI, deterministic examination analytics, adaptive spaced-repetition scheduling, and dual-mode persistence (Local SQLite + Cloud Supabase PostgreSQL).
+Combines official Google Gemini generative AI, deterministic examination analytics, metacognitive confidence calibration, interactive CBT simulation, adaptive spaced-repetition scheduling, and dual-mode persistence (Local SQLite + Cloud Supabase PostgreSQL).
 
 ---
 
-## 🌟 Key Features in v1.0
+## 🌟 Key Features in v2.0
 
-1. **AI Question Studio & RAG Exemplar Retrieval:**
-   - Calibrated strictly against authentic **BPSC Prelims (68th, 69th, and 70th CCE)** and UPSC Prelims examination patterns.
-   - **Few-Shot RAG Pipeline:** Automatically queries and injects authentic official BPSC PYQs from the database into the prompt to enforce high-rigor multi-statement formats, deep historical/geographic nuance, and sophisticated distractor traps.
-   - Formats: Standard 4-option MCQs, Statement-based (1 and 2, 2 and 3), Chronology, Matching Columns, Assertion-Reason, and Bihar Special.
-   - Interactive preview, distractor notes, and editing before saving to the question bank.
-   - Distinctly labeled as practice questions (never falsified as official PYQs).
+1. **Dual-Mode Examination Engine & Interactive CBT Simulation:**
+   - **Interactive CBT Mode / OMR Question Palette:** Step-by-step examination view with live question jump palette (Answered 🟢, Unanswered ⚪, Marked for Review 🟣), live countdown/elapsed timers, and optional Instant Answer Reveal in Study Mode.
+   - **Classic Full Paper Scroll Mode:** Complete single-page test format for rapid offline-style mock drill.
+   - Standard negative marking defaulting to authentic **-0.33 (1/3rd penalty)**.
+   - Immediate **"Retry Missed / Skipped Questions"** action on test completion.
 
-2. **AI Study Tutor:**
-   - Pedagogical modes: First principles, BPSC exam-oriented summary, Option-by-option breakdown, Socratic hints without spoilers, Analogies, Comparison tables, and Timelines.
-   - In-session conversation memory.
+2. **Metacognitive Calibration & Guesswork Risk Analysis:**
+   - Confidence levels (`High`, `Medium`, `Guess`) evaluated across post-test scorecards and dashboard.
+   - **Blind Spot Alert:** Automatically pinpoints questions answered incorrectly despite marking `High` confidence.
+   - **Guess Impact Telemetry:** Measures expected value per guess under negative marking rules to prevent negative penalty bleed.
 
-3. **Practice & Mock Examination Engine:**
-   - Practice (untimed), Timed Drill (1 min/Q), and Full Mock Exams.
-   - Configurable negative marking (`0.0`, `0.25`, `0.33` marks).
-   - Per-question confidence rating (`High`, `Medium`, `Guess`).
-   - "Explain My Mistake" action connecting directly to the AI Tutor.
+3. **Complete 4-Option Context Preservation in AI Tutor & Diagnosis:**
+   - Full option maps (`A` through `D`) are preserved across test sessions, Error Notebook, and the AI Study Tutor.
+   - AI Tutor breaks down all four choices with distractors, analogies, mnemonics, or Socratic follow-up quiz questions.
 
-4. **Deterministic Analytics & AI Performance Coach:**
-   - Pure Python/SQL computation: Scores, accuracy rates, net scores, and weak area detection.
-   - Transparent sample-size reliability indicators (`Preliminary n<5`, `Moderate 5-15`, `High 15+`).
-   - Post-test diagnostic reports evaluating knowledge gaps, conceptual misunderstandings, and guessing patterns.
+4. **Dedicated Revision Vault & Saved Research Dossiers:**
+   - **Pinned Questions Vault:** Dedicated tab in Error Notebook for drilling bookmarked questions with 1-click test launches.
+   - **Saved Research Dossiers:** Stored policy analyses in Current Affairs Lab with instant 3-MCQ generation.
+   - **Manual Question & Official PYQ Creator:** Add verified questions directly with complete exam provenance metadata.
 
-5. **Error Notebook:**
-   - Systematic mistake classification (Knowledge gap, Conceptual confusion, Misread question, Incorrect elimination / guess, Careless error, Calculation error, Similar fact confusion, Other).
-   - AI-assisted mistake diagnosis with suggested root cause.
-   - Pin tricky questions to your personal revision notebook.
-   - "Practice My Mistakes" drill for rapid remediation.
+5. **AI Question Studio & RAG Exemplar Retrieval:**
+   - Calibrated against 54+ authentic **BPSC Prelims (60th through 69th CCE)** questions.
+   - Interactive preview, distractor notes, and 1-click "Save & Practice This Set Now".
 
-6. **Adaptive Revision Planner:**
-   - Spaced-repetition scheduling based on empirical performance (SM-2 principles).
-   - Customizable target exam date and daily revision budget.
-   - Empirical retention tracking: Measures accuracy gains on retried topics.
-
-7. **Current Affairs & Source Research:**
-   - Verified topic research using Google Search grounding (where supported).
-   - High-yield factual summaries, syllabus linkages, and Bihar-specific angles.
-
-8. **Cloud-First Architecture & Dual Mode:**
+6. **Cloud-First Architecture & Dual Mode:**
    - Operates offline in local SQLite (`question_lab.db`).
+   - GitHub Actions keep-alive workflow (`.github/workflows/keep_alive.yml`) to keep cloud instances active.
    - Seamlessly connects to Supabase PostgreSQL & Supabase Auth when configured.
-   - Built-in SQLite-to-Supabase migration without modifying local data.
 
 ---
 
