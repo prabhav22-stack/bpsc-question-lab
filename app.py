@@ -696,8 +696,11 @@ def init_session_state() -> None:
 
 def show_dashboard() -> None:
     """Overview dashboard with key deterministic metrics, confidence telemetry, and study tools."""
+    q_all = db.list_questions()
+    pyq_count = len(q_all[q_all["source_type"] == "Official PYQ"]) if not q_all.empty else 0
+
     st.markdown(
-        """
+        f"""
         <div class="bpsc-hero">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
                 <span class="bpsc-hero-badge">🎯 71st / 72nd BPSC CCE Prelims Target Tracker</span>
@@ -710,7 +713,7 @@ def show_dashboard() -> None:
                 Adaptive, evidence-based preparation platform with authentic 10-year PYQ benchmarks, interactive CBT OMR examination simulation, and metacognitive confidence calibration.
             </p>
             <div class="bpsc-hero-chips">
-                <span class="bpsc-hero-chip">🏛️ Authentic 10-Yr BPSC PYQs</span>
+                <span class="bpsc-hero-chip">🏛️ {pyq_count} Authentic 10-Yr BPSC PYQs (60th to 70th CCE)</span>
                 <span class="bpsc-hero-chip">🎛️ Dual-Mode CBT & OMR Simulation</span>
                 <span class="bpsc-hero-chip">🧠 Metacognitive Calibration</span>
                 <span class="bpsc-hero-chip">⚡ Gemini AI Grounded Reasoning</span>
@@ -723,7 +726,6 @@ def show_dashboard() -> None:
     attempts = db.get_attempts()
     sessions = db.get_test_sessions()
     overall = analytics.compute_overall_metrics(attempts, sessions)
-    q_all = db.list_questions()
     pinned_df = get_pinned_questions_df()
     calibration = compute_confidence_calibration(attempts)
 
@@ -966,8 +968,34 @@ def show_question_bank() -> None:
         st.info("Your question bank is empty. Add a question or import a CSV.")
         return
 
+    # 10-Year Official PYQ Vault Summary Box
+    pyq_subset = all_questions[all_questions["source_type"] == "Official PYQ"]
+    with st.expander(f"🏛️ 10-Year BPSC Official PYQ Vault ({len(pyq_subset)} Authentic Questions · 60th to 70th CCE)", expanded=False):
+        st.write("Browse and filter authentic BPSC questions from official examination papers across the last 10 years.")
+        ed_counts = pyq_subset["exam_edition"].value_counts().to_dict()
+        p_row1 = st.columns(5)
+        ed_keys_1 = [
+            ("70th BPSC (2024)", "70th BPSC CCE Prelims"),
+            ("69th BPSC (2023)", "69th BPSC CCE Prelims"),
+            ("68th BPSC (2023)", "68th BPSC CCE Prelims"),
+            ("67th BPSC (2022)", "67th BPSC CCE Re-Exam"),
+            ("66th BPSC (2020)", "66th BPSC CCE Prelims"),
+        ]
+        for idx, (short_l, full_e) in enumerate(ed_keys_1):
+            p_row1[idx].metric(short_l, f"{ed_counts.get(full_e, 0)} Qs")
+
+        p_row2 = st.columns(4)
+        ed_keys_2 = [
+            ("65th BPSC (2019)", "65th BPSC CCE Prelims"),
+            ("64th BPSC (2018)", "64th BPSC CCE Prelims"),
+            ("63rd BPSC (2018)", "63rd BPSC CCE Prelims"),
+            ("60-62nd BPSC (2017)", "60th-62nd BPSC CCE Prelims"),
+        ]
+        for idx, (short_l, full_e) in enumerate(ed_keys_2):
+            p_row2[idx].metric(short_l, f"{ed_counts.get(full_e, 0)} Qs")
+
     # Filter Controls
-    c1, c2, c3, c4, c5, c6 = st.columns([1, 1.3, 1.3, 1.2, 1, 1.5])
+    c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.2, 1.2, 1.3, 1.1, 0.9, 1.4])
     exam_filter = c1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
     subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
     subject_filter = c2.selectbox("Subject", subjects, key="qb_subj")
@@ -976,14 +1004,19 @@ def show_question_bank() -> None:
     topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
     topic_filter = c3.selectbox("Topic", topics, key="qb_top")
 
+    editions_list = ["All"] + sorted([e for e in all_questions["exam_edition"].dropna().unique().tolist() if e.strip()])
+    edition_filter = c4.selectbox("Exam Edition", editions_list, key="qb_ed")
+
     src_choices = ["All", "Official PYQ", "Built-in sample", "AI-generated", "User-added"]
-    source_filter = c4.selectbox("Provenance", src_choices, key="qb_src")
-    diff_filter = c5.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="qb_diff")
-    search_query = c6.text_input("Search Keyword", placeholder="e.g. Patna, Kunwar Singh...")
+    source_filter = c5.selectbox("Provenance", src_choices, key="qb_src")
+    diff_filter = c6.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="qb_diff")
+    search_query = c7.text_input("Search Keyword", placeholder="e.g. Patna, Kunwar Singh...")
 
     only_pinned = st.checkbox("📌 Show Pinned Questions Only", value=False, key="qb_only_pinned")
 
     filtered = db.list_questions(exam_filter, subject_filter, topic_filter, source_filter)
+    if edition_filter != "All" and "exam_edition" in filtered.columns:
+        filtered = filtered[filtered["exam_edition"] == edition_filter]
     if diff_filter != "All" and "difficulty" in filtered.columns:
         filtered = filtered[filtered["difficulty"] == diff_filter]
 
@@ -1301,7 +1334,7 @@ def show_question_studio() -> None:
             subject=subject,
             topic=topic.strip() or "General",
             exam=exam,
-            limit=3,
+            limit=5,
         )
         if available_exemplars:
             exemplar_editions = ", ".join(
@@ -1314,9 +1347,16 @@ def show_question_studio() -> None:
                 )
             )
             st.caption(
-                f"🏛️ **Strict BPSC Benchmark Active**: Will retrieve {len(available_exemplars)} genuine PYQ exemplar(s) "
-                f"({exemplar_editions}) to enforce authentic exam depth, multi-statement phrasing, and distractor plausibility."
+                f"🏛️ **Strict BPSC Benchmark Active**: Retrieved **{len(available_exemplars)}** genuine PYQ benchmark(s) "
+                f"({exemplar_editions}) to calibrate authentic exam depth, multi-statement phrasing, and distractor plausibility."
             )
+            with st.expander(f"🔍 Inspect {len(available_exemplars)} Retrieved BPSC Benchmark PYQs", expanded=False):
+                for e_idx, ex in enumerate(available_exemplars, 1):
+                    st.markdown(f"**Benchmark #{e_idx}** ({ex.get('exam_edition', 'BPSC PYQ')} · `{ex.get('subject', '')}` → `{ex.get('topic', '')}`)")
+                    st.write(f"*{ex.get('question', '')}*")
+                    st.caption(f"Official Answer: `{ex.get('correct_option', '')}` · Concept: {ex.get('concept_tested', 'Syllabus core')}")
+                    if e_idx < len(available_exemplars):
+                        st.divider()
 
         if st.button("✨ Generate Calibrated Questions", type="primary"):
             with st.spinner("Retrieving BPSC PYQs and generating calibrated exam questions..."):
@@ -2029,6 +2069,39 @@ def show_practice() -> None:
     # -------------------------------------------------------------------------
     # C. Configuration for Starting a New Test Session
     # -------------------------------------------------------------------------
+    all_pyqs_df = db.list_questions(source_type="Official PYQ")
+    if not all_pyqs_df.empty:
+        with st.container(border=True):
+            p_col_txt, p_col_btn = st.columns([3, 1.2])
+            with p_col_txt:
+                st.markdown("##### 🏛️ Quick Launch: 10-Year Authentic BPSC PYQ Mock Drill")
+                st.caption(
+                    f"Test your preparation against **{len(all_pyqs_df)}** authentic official questions (60th to 70th CCE) "
+                    "with real BPSC -0.33 negative marking and Interactive OMR Palette."
+                )
+            with p_col_btn:
+                if st.button("🎯 Launch 15-Q PYQ Mock", type="primary", use_container_width=True):
+                    pyq_ids = all_pyqs_df["id"].astype(int).tolist()
+                    chosen = random.sample(pyq_ids, k=min(15, len(pyq_ids)))
+                    st.session_state["active_test"] = {
+                        "session_id": str(uuid.uuid4())[:8],
+                        "question_ids": chosen,
+                        "exam": "BPSC",
+                        "test_mode": "10-Year Authentic PYQ Benchmark Mock",
+                        "ui_style": "Interactive OMR Palette",
+                        "instant_feedback": False,
+                        "negative_rate": 0.33,
+                        "start_time": time.time(),
+                        "current_index": 0,
+                        "answers": {},
+                        "confidences": {},
+                        "marked_review": [],
+                        "question_times": {},
+                        "last_q_timestamp": time.time(),
+                    }
+                    st.session_state["test_results"] = None
+                    st.rerun()
+
     with st.container(border=True):
         st.subheader("Configure Custom Practice or Mock Session")
         f1, f2, f3, f4 = st.columns(4)
@@ -2057,6 +2130,14 @@ def show_practice() -> None:
         matching_ids = db.get_question_ids(exam, subject, topic, source_type=src_map[src_choice])
         if src_choice == "Pinned Questions Only":
             matching_ids = [qid for qid in matching_ids if db.is_question_pinned(int(qid))]
+
+        if src_choice == "Official PYQs Only" and matching_ids:
+            q_df_sub = db.get_questions_by_ids(matching_ids)
+            if not q_df_sub.empty and "exam_edition" in q_df_sub.columns:
+                ed_opts = ["All 10-Year Editions"] + sorted([e for e in q_df_sub["exam_edition"].dropna().unique().tolist() if e.strip()])
+                chosen_ed = st.selectbox("Filter Specific BPSC Exam Edition (Optional)", ed_opts, key="p_ed_sub")
+                if chosen_ed != "All 10-Year Editions":
+                    matching_ids = q_df_sub[q_df_sub["exam_edition"] == chosen_ed]["id"].astype(int).tolist()
 
         if not matching_ids:
             st.warning("No questions match these filters. Adjust filters or generate new questions in AI Studio.")
@@ -2736,11 +2817,17 @@ def show_current_affairs() -> None:
             key="ca_time_select",
         )
 
-        ca_exemplars = db.retrieve_pyq_exemplars(subject="Current Affairs", topic=ca_category[:20], limit=2)
+        ca_exemplars = db.retrieve_pyq_exemplars(subject="Current Affairs", topic=ca_category[:20], limit=4)
         if ca_exemplars:
             st.caption(
-                f"🏛️ Strict BPSC Benchmark Active: Will calibrate against {len(ca_exemplars)} genuine Current Affairs PYQs."
+                f"🏛️ **Strict BPSC Benchmark Active**: Calibrating against **{len(ca_exemplars)}** authentic Current Affairs PYQ benchmarks."
             )
+            with st.expander(f"🔍 Inspect {len(ca_exemplars)} Retrieved Current Affairs Benchmarks", expanded=False):
+                for c_idx, cex in enumerate(ca_exemplars, 1):
+                    st.markdown(f"**Benchmark #{c_idx}** ({cex.get('exam_edition', 'BPSC PYQ')}) — *{cex.get('question', '')}*")
+                    st.caption(f"Official Answer: `{cex.get('correct_option', '')}` · Focus: {cex.get('topic', '')}")
+                    if c_idx < len(ca_exemplars):
+                        st.divider()
 
         if st.button("⚡ Generate Current Affairs Questions", type="primary", key="btn_gen_ca"):
             with st.spinner("Generating authenticated Current Affairs questions..."):

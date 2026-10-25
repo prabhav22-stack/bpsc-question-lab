@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
@@ -1555,6 +1556,12 @@ VERIFIED_BPSC_PYQS = [
     },
 ]
 
+try:
+    from pyqs_archive import NEW_VERIFIED_PYQS
+    VERIFIED_BPSC_PYQS.extend(NEW_VERIFIED_PYQS)
+except ImportError:
+    pass
+
 
 def connect_db() -> sqlite3.Connection:
     """Return a connection with Row factory enabled."""
@@ -1828,16 +1835,18 @@ def retrieve_pyq_exemplars(
     subject: str = "All",
     topic: str = "",
     exam: str = "BPSC",
-    limit: int = 3,
+    limit: int = 5,
+    exam_edition: str = "All",
     conn_factory: Any = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve authentic official PYQs matching subject/topic to serve as stylistic few-shot exemplars.
 
     Selection strategy:
-    1. PYQs where subject matches and topic/question/subtopic contains the topic query keyword.
-    2. Other PYQs from the same subject.
-    3. Other PYQs from the target exam (e.g. BPSC).
-    4. General official PYQ fallback.
+    1. Exact subject + topic keyword match in question, topic, subtopic, or concept_tested.
+    2. Multi-keyword decomposition across significant terms.
+    3. Other PYQs from the same subject.
+    4. Other PYQs from the target exam edition / exam.
+    5. General official PYQ fallback.
     """
     connect = conn_factory or connect_db
     with connect() as conn:
@@ -1855,55 +1864,89 @@ def retrieve_pyq_exemplars(
                     results.append(row_dict)
 
         clean_topic = topic.strip().lower()
-        # Stage 1: Exact subject + topic keyword match in question, topic, or subtopic
+        edition_clause = " AND exam_edition = ?" if exam_edition != "All" else ""
+        edition_param = [exam_edition] if exam_edition != "All" else []
+
+        # Stage 1: Topic keywords match in question, topic, subtopic, or concept_tested
         if clean_topic and clean_topic != "general":
             pattern = f"%{clean_topic}%"
             if subject and subject != "All":
                 stage1 = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM questions
                     WHERE source_type = 'Official PYQ'
-                      AND subject = ?
-                      AND (LOWER(topic) LIKE ? OR LOWER(subtopic) LIKE ? OR LOWER(question) LIKE ?)
+                      AND subject = ?{edition_clause}
+                      AND (LOWER(topic) LIKE ? OR LOWER(subtopic) LIKE ? OR LOWER(concept_tested) LIKE ? OR LOWER(question) LIKE ?)
                     ORDER BY id DESC LIMIT ?
                     """,
-                    (subject, pattern, pattern, pattern, limit),
+                    [subject] + edition_param + [pattern, pattern, pattern, pattern, limit],
                 ).fetchall()
             else:
                 stage1 = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM questions
-                    WHERE source_type = 'Official PYQ'
-                      AND (LOWER(topic) LIKE ? OR LOWER(subtopic) LIKE ? OR LOWER(question) LIKE ?)
+                    WHERE source_type = 'Official PYQ'{edition_clause}
+                      AND (LOWER(topic) LIKE ? OR LOWER(subtopic) LIKE ? OR LOWER(concept_tested) LIKE ? OR LOWER(question) LIKE ?)
                     ORDER BY id DESC LIMIT ?
                     """,
-                    (pattern, pattern, pattern, limit),
+                    edition_param + [pattern, pattern, pattern, pattern, limit],
                 ).fetchall()
             _add_rows(stage1)
+
+            # Stage 1b: Tokenized keyword matching if still under limit
+            if len(results) < limit:
+                stop_words = {"in", "and", "the", "of", "to", "for", "a", "an", "on", "with", "or", "&", "state"}
+                tokens = [w for w in re.split(r"[\s,;/-]+", clean_topic) if len(w) >= 3 and w not in stop_words]
+                for tok in tokens:
+                    if len(results) >= limit:
+                        break
+                    tok_pat = f"%{tok}%"
+                    if subject and subject != "All":
+                        tok_rows = conn.execute(
+                            f"""
+                            SELECT * FROM questions
+                            WHERE source_type = 'Official PYQ'
+                              AND subject = ?{edition_clause}
+                              AND (LOWER(topic) LIKE ? OR LOWER(subtopic) LIKE ? OR LOWER(concept_tested) LIKE ? OR LOWER(question) LIKE ?)
+                            ORDER BY id DESC LIMIT ?
+                            """,
+                            [subject] + edition_param + [tok_pat, tok_pat, tok_pat, tok_pat, limit - len(results)],
+                        ).fetchall()
+                    else:
+                        tok_rows = conn.execute(
+                            f"""
+                            SELECT * FROM questions
+                            WHERE source_type = 'Official PYQ'{edition_clause}
+                              AND (LOWER(topic) LIKE ? OR LOWER(subtopic) LIKE ? OR LOWER(concept_tested) LIKE ? OR LOWER(question) LIKE ?)
+                            ORDER BY id DESC LIMIT ?
+                            """,
+                            edition_param + [tok_pat, tok_pat, tok_pat, tok_pat, limit - len(results)],
+                        ).fetchall()
+                    _add_rows(tok_rows)
 
         # Stage 2: Same subject official PYQs
         if len(results) < limit and subject and subject != "All":
             stage2 = conn.execute(
-                """
+                f"""
                 SELECT * FROM questions
                 WHERE source_type = 'Official PYQ'
-                  AND subject = ?
+                  AND subject = ?{edition_clause}
                 ORDER BY id DESC LIMIT ?
                 """,
-                (subject, limit - len(results)),
+                [subject] + edition_param + [limit - len(results)],
             ).fetchall()
             _add_rows(stage2)
 
         # Stage 3: Target exam official PYQs
         if len(results) < limit:
             stage3 = conn.execute(
-                """
+                f"""
                 SELECT * FROM questions
-                WHERE source_type = 'Official PYQ'
+                WHERE source_type = 'Official PYQ'{edition_clause}
                   AND (exam = ? OR ? = 'Both' OR exam = 'Both')
                 ORDER BY id DESC LIMIT ?
                 """,
-                (exam, exam, limit - len(results)),
+                edition_param + [exam, exam, limit - len(results)],
             ).fetchall()
             _add_rows(stage3)
 

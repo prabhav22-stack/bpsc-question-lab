@@ -28,8 +28,10 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - **Saved Research Dossiers:** Stored policy analyses in Current Affairs Lab with instant 3-MCQ generation.
    - **Manual Question & Official PYQ Creator:** Add verified questions directly with complete exam provenance metadata.
 
-5. **AI Question Studio & RAG Exemplar Retrieval:**
-   - Calibrated against 54+ authentic **BPSC Prelims (60th through 69th CCE)** questions.
+5. **AI Question Studio & 10-Year PYQ RAG Retrieval:**
+   - Calibrated against **101+ authentic BPSC Prelims questions** spanning the last 10 years (**60th through 70th CCE**, including 70th BPSC Prelims held in December 2024).
+   - **10-Year Official PYQ Vault & Exam Browser**: Filter, inspect, and practice questions specifically by edition (70th, 69th, 68th, 67th, 66th, 65th, 64th, 63rd, 60-62nd).
+   - Enhanced multi-keyword exemplar retrieval (up to 5 benchmarks) with side-by-side inspection drawers.
    - Interactive preview, distractor notes, and 1-click "Save & Practice This Set Now".
 
 6. **Cloud-First Architecture & Dual Mode:**

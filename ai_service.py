@@ -130,7 +130,7 @@ def generate_question_set(
                 subject=subject,
                 topic=topic,
                 exam=exam,
-                limit=3,
+                limit=5,
             )
         except Exception:
             exemplars = []
