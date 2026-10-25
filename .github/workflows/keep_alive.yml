@@ -1,0 +1,20 @@
+# GitHub Actions workflow to keep Streamlit Cloud app from sleeping.
+# Sends a lightweight HEAD request every 6 hours.
+name: Keep Alive
+
+on:
+  schedule:
+    # Every 6 hours: midnight, 6 AM, noon, 6 PM UTC
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Streamlit App
+        run: |
+          echo "Pinging https://question-lab.streamlit.app ..."
+          curl -sI --max-time 30 https://question-lab.streamlit.app | head -5
+          echo "Ping completed at $(date -u)"

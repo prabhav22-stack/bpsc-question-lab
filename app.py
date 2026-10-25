@@ -62,8 +62,138 @@ build_weekly_plan = revision_engine.build_weekly_plan
 
 
 # -----------------------------------------------------------------------------
-# App Initialization & State Management
 # -----------------------------------------------------------------------------
+# App Initialization, Custom Styling & State Management
+# -----------------------------------------------------------------------------
+
+def inject_custom_css() -> None:
+    """Inject modern, responsive CSS styling for high-yield exam preparation UI."""
+    css = """
+    <style>
+    /* Global Container & Typography Polish */
+    .block-container {
+        padding-top: 1.8rem;
+        padding-bottom: 3rem;
+        max-width: 1200px;
+    }
+    
+    /* Modern Card Container */
+    .bpsc-card {
+        background: var(--background-color, #ffffff);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 12px;
+        padding: 18px 22px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .bpsc-card:hover {
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+    }
+    
+    /* Hero Banner */
+    .bpsc-hero {
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #1e293b 100%);
+        color: #ffffff;
+        padding: 24px 28px;
+        border-radius: 16px;
+        margin-bottom: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.35);
+    }
+    .bpsc-hero-badge {
+        display: inline-block;
+        background: rgba(245, 158, 11, 0.2);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.4);
+        padding: 4px 12px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    
+    /* Provenance Badges */
+    .bpsc-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 12px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+    }
+    .badge-pyq {
+        background-color: #ecfdf5;
+        color: #065f46;
+        border: 1px solid #a7f3d0;
+    }
+    .badge-ai {
+        background-color: #f5f3ff;
+        color: #5b21b6;
+        border: 1px solid #ddd6fe;
+    }
+    .badge-sample {
+        background-color: #eff6ff;
+        color: #1e40af;
+        border: 1px solid #bfdbfe;
+    }
+    .badge-verified {
+        background-color: #fef3c7;
+        color: #92400e;
+        border: 1px solid #fde68a;
+    }
+    .badge-difficulty-easy {
+        background-color: #f0fdf4;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+    }
+    .badge-difficulty-medium {
+        background-color: #fffbeb;
+        color: #92400e;
+        border: 1px solid #fde68a;
+    }
+    .badge-difficulty-hard {
+        background-color: #fef2f2;
+        color: #991b1b;
+        border: 1px solid #fecaca;
+    }
+    
+    /* Metric Cards Enhancement */
+    [data-testid="stMetric"] {
+        background: rgba(248, 250, 252, 0.85);
+        border: 1px solid rgba(226, 232, 240, 0.95);
+        border-radius: 12px;
+        padding: 14px 18px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+    
+    /* Sidebar Brand Box */
+    .sidebar-brand-card {
+        background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
+        color: white;
+        padding: 16px;
+        border-radius: 14px;
+        margin-bottom: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    .sidebar-target-box {
+        background: rgba(30, 58, 138, 0.07);
+        border-left: 3px solid #3b82f6;
+        padding: 12px 14px;
+        border-radius: 0 10px 10px 0;
+        font-size: 13px;
+        margin-top: 12px;
+        line-height: 1.4;
+    }
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
 
 def init_session_state() -> None:
     """Initialize Streamlit session state variables."""
@@ -87,22 +217,37 @@ def init_session_state() -> None:
 # -----------------------------------------------------------------------------
 
 def show_dashboard() -> None:
-    """Overview dashboard with key deterministic metrics and study tools."""
-    st.title("📚 BPSC Question Lab v1.0")
-    st.caption(f"Version {APP_VERSION} · Personal AI Examination Laboratory for BPSC & UPSC")
+    """Overview dashboard with key deterministic metrics, syllabus readiness, and quick study tools."""
+    st.markdown(
+        """
+        <div class="bpsc-hero">
+            <span class="bpsc-hero-badge">🎯 71st BPSC CCE Prelims Target Tracker</span>
+            <h2 style="color: white; margin: 8px 0 4px 0; font-size: 26px; font-weight: 800;">BPSC Question Lab</h2>
+            <p style="color: #cbd5e1; margin: 0; font-size: 14px;">
+                Evidence-based exam preparation with authentic 10-year PYQ benchmarks, AI practice sets, and deterministic spaced repetition.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     attempts = db.get_attempts()
     sessions = db.get_test_sessions()
     overall = analytics.compute_overall_metrics(attempts, sessions)
     q_all = db.list_questions()
+    pyq_count = len(q_all[q_all["source_type"] == "Official PYQ"]) if not q_all.empty else 0
 
-    # Top KPI Metrics
+    # Top KPI Metrics with helpful tooltips and status deltas
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Question Bank", len(q_all))
-    k2.metric("Tests Completed", overall["total_tests"])
-    k3.metric("Total Attempts", overall["total_attempts"])
-    k4.metric("Overall Accuracy", f"{overall['accuracy']}%" if overall["total_attempts"] > 0 else "N/A")
-    k5.metric("Net Score", f"{overall['net_score']:.1f}")
+    k1.metric("Question Bank", f"{len(q_all)} MCQs", help=f"Includes {pyq_count} verified official BPSC PYQs")
+    k2.metric("Tests Completed", overall["total_tests"], help="Total mock and drill test sessions recorded")
+    k3.metric("Total Attempts", overall["total_attempts"], help="Individual question attempts logged")
+    
+    acc_val = f"{overall['accuracy']}%" if overall["total_attempts"] > 0 else "N/A"
+    acc_delta = "Ready" if overall["accuracy"] >= 70 else ("In Progress" if overall["total_attempts"] > 0 else None)
+    k4.metric("Overall Accuracy", acc_val, delta=acc_delta)
+    
+    k5.metric("Net Score", f"{overall['net_score']:.1f}", help="With official negative marking (-0.33) applied")
 
     # Cloud & AI System Status Pills
     s1, s2 = st.columns(2)
@@ -123,14 +268,26 @@ def show_dashboard() -> None:
 
     st.divider()
 
-    # Topic Analytics & Weak Spots
+    # Visual Analytics & Weak Spots
     col_left, col_right = st.columns([3, 2])
     with col_left:
-        st.subheader("📊 Weakest Syllabus Areas")
+        st.subheader("📊 Syllabus Mastery & Weak Spots")
         if not attempts.empty:
+            # Subject Mastery Bar Chart
+            try:
+                subj_acc = attempts.groupby("subject").apply(
+                    lambda g: round((g["is_correct"] == 1).sum() / len(g) * 100)
+                ).to_frame(name="Accuracy (%)")
+                if not subj_acc.empty:
+                    st.caption("Subject-wise Accuracy Breakdown (%)")
+                    st.bar_chart(subj_acc, color="#3b82f6", use_container_width=True)
+            except Exception:
+                pass
+
             topic_df = analytics.compute_topic_analytics(attempts)
             weak = analytics.identify_weak_areas(topic_df, max_items=5)
             if not weak.empty:
+                st.write("**Top Priority Topics for Revision:**")
                 st.dataframe(
                     weak[["subject", "topic", "attempts", "accuracy", "sample_size_label", "priority"]].rename(
                         columns={"attempts": "Attempts", "accuracy": "Accuracy (%)", "sample_size_label": "Evidence", "priority": "Urgency"}
@@ -139,24 +296,39 @@ def show_dashboard() -> None:
                     hide_index=True,
                 )
             else:
-                st.success("No critical weak spots detected with low accuracy! Keep practising.")
+                st.success("🎉 No critical weak spots detected with low accuracy! Keep practising.")
         else:
-            st.info("No test attempts recorded yet. Start a test to reveal your performance breakdown.")
+            st.info("No test attempts recorded yet. Start a test to reveal your subject mastery breakdown.")
 
     with col_right:
         st.subheader("🎯 Quick Actions")
-        if st.button("🚀 Start Practice Test", type="primary", use_container_width=True):
-            st.session_state["nav_page"] = "Practice & Mock Tests"
-            st.rerun()
-        if st.button("✨ Generate AI Questions", use_container_width=True):
-            st.session_state["nav_page"] = "AI Question Studio"
-            st.rerun()
-        if st.button("📕 Open Error Notebook", use_container_width=True):
-            st.session_state["nav_page"] = "Error Notebook"
-            st.rerun()
-        if st.button("📅 View Adaptive Revision Plan", use_container_width=True):
-            st.session_state["nav_page"] = "Revision Planner"
-            st.rerun()
+        with st.container(border=True):
+            st.markdown("**🚀 Start Practice Test**")
+            st.caption("Timed drills or full mocks with customizable negative marking.")
+            if st.button("Launch Practice Test", type="primary", use_container_width=True):
+                st.session_state["nav_page"] = "Practice & Mock Tests"
+                st.rerun()
+
+        with st.container(border=True):
+            st.markdown("**✨ AI Question Studio**")
+            st.caption("Generate exam-grade questions benchmarked against official PYQs.")
+            if st.button("Open Question Studio", use_container_width=True):
+                st.session_state["nav_page"] = "AI Question Studio"
+                st.rerun()
+
+        with st.container(border=True):
+            st.markdown("**📕 Error Notebook**")
+            st.caption("Analyze incorrect attempts and diagnose recurring mistakes.")
+            if st.button("Review My Mistakes", use_container_width=True):
+                st.session_state["nav_page"] = "Error Notebook"
+                st.rerun()
+
+        with st.container(border=True):
+            st.markdown("**📅 Adaptive Revision Plan**")
+            st.caption("7-day spaced repetition schedule based on your performance.")
+            if st.button("View Revision Schedule", use_container_width=True):
+                st.session_state["nav_page"] = "Revision Planner"
+                st.rerun()
 
 
 # -----------------------------------------------------------------------------
@@ -164,9 +336,25 @@ def show_dashboard() -> None:
 # -----------------------------------------------------------------------------
 
 def show_question_bank() -> None:
-    """Browse, filter, search, import, and export the question bank."""
+    """Browse, filter, search, import, and export the question bank with rich interactive cards."""
     st.title("📖 Question Bank")
-    st.write("Browse, filter, import and export questions stored on this computer.")
+    st.caption("Browse, filter, search, and export official PYQs and practice questions.")
+
+    all_questions = db.list_questions()
+    if all_questions.empty:
+        st.info("Your question bank is empty. Add a question or import a CSV.")
+        return
+
+    # Top KPI Summary Cards for Question Bank
+    pyqs = all_questions[all_questions["source_type"] == "Official PYQ"]
+    ai_qs = all_questions[all_questions["is_ai_generated"] == 1]
+    samples = all_questions[all_questions["source_type"] == "Built-in sample"]
+
+    qb1, qb2, qb3, qb4 = st.columns(4)
+    qb1.metric("Total Questions", len(all_questions))
+    qb2.metric("🏛️ Official PYQs", len(pyqs), help="Authentic questions from 60th to 69th BPSC CCE Prelims")
+    qb3.metric("🤖 AI Practice Sets", len(ai_qs), help="Generated practice questions matching BPSC standard")
+    qb4.metric("📌 Starter Samples", len(samples), help="Built-in curriculum anchor questions")
 
     # CSV Import Area
     with st.expander("📥 Import Questions from CSV", expanded=False):
@@ -184,24 +372,21 @@ def show_question_bank() -> None:
                 st.caption(f"{len(problems) - 10} additional messages not shown.")
             st.rerun()
 
-    all_questions = db.list_questions()
-    if all_questions.empty:
-        st.info("Your question bank is empty. Add a question or import a CSV.")
-        return
+    # Filter & Search Controls Container
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        exam_filter = c1.selectbox("Filter by Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
+        subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
+        subject_filter = c2.selectbox("Filter by Subject", subjects, key="qb_subj")
 
-    # Filter Controls
-    c1, c2, c3, c4, c5 = st.columns(5)
-    exam_filter = c1.selectbox("Filter by Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
-    subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
-    subject_filter = c2.selectbox("Filter by Subject", subjects, key="qb_subj")
+        interim = db.list_questions(exam=exam_filter, subject=subject_filter)
+        topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
+        topic_filter = c3.selectbox("Filter by Topic", topics, key="qb_top")
+        
+        src_choices = ["All", "Official PYQ", "Built-in sample", "AI-generated", "User-added"]
+        source_filter = c4.selectbox("Provenance / Source", src_choices, key="qb_src")
 
-    interim = db.list_questions(exam=exam_filter, subject=subject_filter)
-    topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
-    topic_filter = c3.selectbox("Filter by Topic", topics, key="qb_top")
-    
-    src_choices = ["All", "Official PYQ", "Built-in sample", "AI-generated", "User-added"]
-    source_filter = c4.selectbox("Provenance / Source", src_choices, key="qb_src")
-    search_query = c5.text_input("Search Keyword", placeholder="e.g. Patna, Champaran...")
+        search_query = st.text_input("🔍 Search Keyword in Questions, Topics, or Explanations", placeholder="e.g. Patna, Kunwar Singh, Champaran, Directive Principles...")
 
     filtered = db.list_questions(exam_filter, subject_filter, topic_filter, source_filter)
     if search_query.strip():
@@ -212,37 +397,69 @@ def show_question_bank() -> None:
             | filtered["explanation"].str.lower().str.contains(term, na=False)
         ]
 
-    st.caption(f"Showing {len(filtered)} of {len(all_questions)} question(s).")
+    # Display Mode Toggle: Table View vs Interactive Question Cards
+    st.markdown(f"**Showing {len(filtered)} of {len(all_questions)} question(s)**")
+    view_mode = st.radio("Display Format", ["🗂️ Interactive Question Cards", "📋 Data Table"], horizontal=True, key="qb_view_mode")
 
-    # Display Table with Provenance Columns
-    disp_cols = [
-        "id", "source_type", "exam_edition", "exam_year", "subject", "topic",
-        "question", "correct_option", "difficulty", "answer_key_status"
-    ]
-    available_cols = [c for c in disp_cols if c in filtered.columns]
-    st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
+    if view_mode == "📋 Data Table":
+        disp_cols = [
+            "id", "source_type", "exam_edition", "exam_year", "subject", "topic",
+            "question", "correct_option", "difficulty", "answer_key_status"
+        ]
+        available_cols = [c for c in disp_cols if c in filtered.columns]
+        st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
+    else:
+        # Interactive Question Cards View
+        page_size = 10
+        total_pages = max(1, (len(filtered) - 1) // page_size + 1)
+        cur_page = st.number_input(f"Page (1 to {total_pages})", min_value=1, max_value=total_pages, value=1, step=1)
+        start_idx = (cur_page - 1) * page_size
+        page_items = filtered.iloc[start_idx : start_idx + page_size]
 
-    # Detailed Provenance Cards
-    with st.expander("🔍 View Detailed Question & Provenance Cards", expanded=False):
-        for _, q in filtered.head(15).iterrows():
-            badge = "🏛️ Official Verified PYQ" if q.get("source_type") == "Official PYQ" else ("🤖 AI-Generated Practice" if q.get("is_ai_generated") else "📌 Practice Sample")
-            provenance_line = f"**{badge}**"
-            if q.get("exam_edition"):
-                provenance_line += f" · {q['exam_edition']}"
-            if q.get("exam_year"):
-                provenance_line += f" ({q['exam_year']})"
-            if q.get("paper_set"):
-                provenance_line += f" · {q['paper_set']}"
-            if q.get("official_qno") and int(q["official_qno"]) > 0:
-                provenance_line += f" · Q.{int(q['official_qno'])}"
-            if q.get("answer_key_status"):
-                provenance_line += f" · Status: `{q['answer_key_status']}`"
+        for _, q in page_items.iterrows():
+            qid = int(q["id"])
+            is_pyq = q.get("source_type") == "Official PYQ"
+            is_ai = bool(q.get("is_ai_generated"))
+            badge_class = "badge-pyq" if is_pyq else ("badge-ai" if is_ai else "badge-sample")
+            badge_icon = "🏛️" if is_pyq else ("🤖" if is_ai else "📌")
+            badge_text = "Official PYQ" if is_pyq else ("AI Practice" if is_ai else "Sample")
 
-            st.markdown(f"#### Question #{q['id']}: {q['question']}")
-            st.caption(provenance_line)
-            st.write(f"- **A.** {q['option_a']}\n- **B.** {q['option_b']}\n- **C.** {q['option_c']}\n- **D.** {q['option_d']}")
-            st.info(f"**Correct Option:** `{q['correct_option']}` · **Explanation:** {q['explanation']}")
-            st.divider()
+            with st.container(border=True):
+                # Header with Provenance & Metadata
+                h_col1, h_col2 = st.columns([3, 1])
+                with h_col1:
+                    prov_info = f"<span class='bpsc-badge {badge_class}'>{badge_icon} {badge_text}</span>"
+                    if q.get("exam_edition"):
+                        prov_info += f" &nbsp;<b>{q['exam_edition']}</b>"
+                    if q.get("exam_year"):
+                        prov_info += f" ({q['exam_year']})"
+                    if q.get("official_qno") and int(q["official_qno"]) > 0:
+                        prov_info += f" · Q.{int(q['official_qno'])}"
+                    st.markdown(prov_info, unsafe_allow_html=True)
+                with h_col2:
+                    diff = q.get("difficulty", "Medium")
+                    diff_class = f"badge-difficulty-{diff.lower()}"
+                    st.markdown(f"<div style='text-align: right;'><span class='bpsc-badge {diff_class}'>{diff}</span></div>", unsafe_allow_html=True)
+
+                st.caption(f"**Subject:** {q['subject']} &nbsp;|&nbsp; **Topic:** {q['topic']}")
+                st.markdown(f"**Q.{qid}: {q['question']}**")
+
+                # Options Grid
+                o1, o2 = st.columns(2)
+                o1.markdown(f"**A.** {q['option_a']}")
+                o1.markdown(f"**B.** {q['option_b']}")
+                o2.markdown(f"**C.** {q['option_c']}")
+                o2.markdown(f"**D.** {q['option_d']}")
+
+                # Expandable Answer & Explanation
+                with st.expander(f"🔑 Reveal Correct Answer & Analysis", expanded=False):
+                    st.success(f"**Correct Option:** `{q['correct_option']}`")
+                    if q.get("explanation"):
+                        st.info(f"**Explanation:** {q['explanation']}")
+                    if q.get("distractor_notes"):
+                        st.caption(f"**Distractor Trap:** {q['distractor_notes']}")
+                    if q.get("concept_tested"):
+                        st.caption(f"**Core Concept:** {q['concept_tested']}")
 
     # Export Buttons
     col_exp1, col_exp2 = st.columns(2)
@@ -258,6 +475,12 @@ def show_question_bank() -> None:
         attempts = db.get_attempts()
         if not attempts.empty:
             att_csv = attempts.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Export Attempt History to CSV",
+                data=att_csv,
+                file_name="bpsc_attempts_export.csv",
+                mime="text/csv",
+            )
             st.download_button(
                 "⬇️ Export Attempt History to CSV",
                 data=att_csv,
@@ -549,33 +772,80 @@ def show_practice() -> None:
 
     # Display Test Results if just finished
     if results is not None:
-        st.subheader("Test Scorecard")
         total = len(results["items"])
         correct = sum(1 for r in results["items"] if r["is_correct"])
         incorrect = sum(1 for r in results["items"] if not r["is_correct"] and r["selected_option"] != "-")
         unanswered = sum(1 for r in results["items"] if r["selected_option"] == "-")
         accuracy = round(correct / total * 100) if total > 0 else 0
 
-        sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-        sc1.metric("Total Score", f"{results['total_score']:.2f}")
-        sc2.metric("Accuracy", f"{accuracy}%")
-        sc3.metric("Correct", correct)
-        sc4.metric("Incorrect", incorrect)
-        sc5.metric("Unanswered", unanswered)
+        # Performance Headline Banner
+        if accuracy >= 70:
+            st.markdown(
+                """
+                <div style="background: linear-gradient(135deg, #065f46 0%, #047857 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(6, 95, 70, 0.2);">
+                    <h3 style="color: white; margin: 0 0 4px 0;">🎉 Outstanding Performance!</h3>
+                    <p style="margin: 0; color: #d1fae5; font-size: 14px;">Strong conceptual grasp and answer selection. Review distractor traps below for complete mastery.</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        elif accuracy >= 50:
+            st.markdown(
+                """
+                <div style="background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.2);">
+                    <h3 style="color: white; margin: 0 0 4px 0;">👍 Solid Practice Drill!</h3>
+                    <p style="margin: 0; color: #dbeafe; font-size: 14px;">Good effort. Pay close attention to nuanced distractors and statement elimination below.</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div style="background: linear-gradient(135deg, #991b1b 0%, #b91c1c 100%); color: white; padding: 18px 24px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(153, 27, 27, 0.2);">
+                    <h3 style="color: white; margin: 0 0 4px 0;">⚠️ Targeted Remediation Needed</h3>
+                    <p style="margin: 0; color: #fee2e2; font-size: 14px;">Conceptual gaps detected. Use the 'Explain My Mistake with AI Tutor' button on missed questions below.</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
+        sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+        sc1.metric("Net Score", f"{results['total_score']:.2f}", help="With official negative marking penalty applied")
+        sc2.metric("Accuracy", f"{accuracy}%")
+        sc3.metric("✅ Correct", correct)
+        sc4.metric("❌ Incorrect", incorrect)
+        sc5.metric("⚠️ Unanswered", unanswered)
+
+        st.caption(f"⏱️ Time spent: {results.get('time_spent', 0):.1f} seconds ({round(results.get('time_spent', 0) / max(1, total), 1)}s per question)")
         st.divider()
 
         # Detailed Review per Question
+        st.subheader("Question-by-Question Review & Distractor Analysis")
         for idx, res in enumerate(results["items"], start=1):
-            status = "✅ Correct" if res["is_correct"] else ("⚠️ Unanswered" if res["selected_option"] == "-" else "❌ Incorrect")
-            with st.expander(f"{status} | Question {idx}: {res['question'][:75]}...", expanded=not res["is_correct"]):
-                st.markdown(f"**{res['question']}**")
-                st.write(f"**Your Answer:** {res['selected_option']}. {res['selected_text']}")
-                st.write(f"**Correct Answer:** {res['correct_option']}. {res['correct_text']}")
+            if res["is_correct"]:
+                status = "✅ Correct (+1.0)"
+            elif res["selected_option"] == "-":
+                status = "⚠️ Skipped (0.0)"
+            else:
+                status = "❌ Incorrect"
+
+            with st.expander(f"{status} | Q.{idx}: {res['question'][:80]}...", expanded=not res["is_correct"]):
+                st.markdown(f"**Question {idx}: {res['question']}**")
+                st.caption(f"**Subject:** {res['subject']} &nbsp;|&nbsp; **Topic:** {res['topic']}")
+
+                col_ans1, col_ans2 = st.columns(2)
+                with col_ans1:
+                    ans_color = "#166534" if res["is_correct"] else "#991b1b"
+                    st.markdown(f"<div style='padding: 8px 12px; background: rgba(248, 250, 252, 0.8); border-radius: 8px;'><b>Your Selection:</b> <span style='color: {ans_color}; font-weight: 700;'>{res['selected_option']}. {res['selected_text']}</span></div>", unsafe_allow_html=True)
+                with col_ans2:
+                    st.markdown(f"<div style='padding: 8px 12px; background: rgba(240, 253, 244, 0.8); border: 1px solid #bbf7d0; border-radius: 8px;'><b>Official Key:</b> <span style='color: #166534; font-weight: 700;'>{res['correct_option']}. {res['correct_text']}</span></div>", unsafe_allow_html=True)
+
+                st.write("")
                 if res.get("explanation"):
-                    st.info(f"**Explanation:** {res['explanation']}")
+                    st.info(f"💡 **Detailed Explanation:**\n\n{res['explanation']}")
                 if res.get("distractor_notes"):
-                    st.caption(f"**Distractor Analysis:** {res['distractor_notes']}")
+                    st.warning(f"⚠️ **Distractor Trap Analysis:**\n\n{res['distractor_notes']}")
 
                 # Action: Explain My Mistake with AI Tutor
                 if not res["is_correct"] and config.is_gemini_configured():
@@ -584,15 +854,23 @@ def show_practice() -> None:
                         st.session_state["nav_page"] = "AI Study Tutor"
                         st.rerun()
 
-        if st.button("Start Another Test", type="primary"):
+        st.write("")
+        c_btn1, c_btn2 = st.columns([1, 2])
+        if c_btn1.button("Start Another Test", type="primary", use_container_width=True):
             st.session_state["test_results"] = None
             st.session_state["active_test"] = None
+            st.rerun()
+        if c_btn2.button("Review Mistakes in Error Notebook", use_container_width=True):
+            st.session_state["test_results"] = None
+            st.session_state["active_test"] = None
+            st.session_state["nav_page"] = "Error Notebook"
             st.rerun()
         return
 
     # Configuration for New Test
     with st.container(border=True):
         st.subheader("Configure Test Session")
+
         f1, f2, f3, f4 = st.columns(4)
         exam = f1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="p_exam")
         subjects = ["All"] + sorted(db.list_questions()["subject"].dropna().unique().tolist())
@@ -614,6 +892,8 @@ def show_practice() -> None:
             st.warning("No questions match these filters. Add or generate some questions first.")
             return
 
+        st.caption(f"🎯 **{len(matching_ids)} question(s)** available matching this criteria.")
+
         c_cnt, c_mode, c_neg = st.columns(3)
         count = c_cnt.slider(
             "Questions in test",
@@ -630,7 +910,7 @@ def show_practice() -> None:
             format_func=lambda x: f"None (0.0)" if x == 0.0 else f"-{x} marks per wrong answer",
         )
 
-        if st.button("🚀 Start Test", type="primary"):
+        if st.button("🚀 Start Test", type="primary", use_container_width=True):
             selected_ids = random.sample(matching_ids, k=count)
             st.session_state["active_test"] = {
                 "session_id": str(uuid.uuid4())[:8],
@@ -645,7 +925,18 @@ def show_practice() -> None:
     # Active Test Submission Form
     if active_test:
         q_frame = db.get_questions_by_ids(active_test["question_ids"])
-        st.subheader(f"Test in Progress · {len(q_frame)} questions ({active_test['test_mode']})")
+        total_q = len(q_frame)
+
+        st.markdown(
+            f"""
+            <div style="background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%); color: white; padding: 14px 20px; border-radius: 12px; margin-bottom: 20px;">
+                <span style="font-size: 13px; font-weight: 700; color: #fbbf24; text-transform: uppercase;">Active Session · {active_test['test_mode']}</span>
+                <h3 style="color: white; margin: 4px 0 0 0;">Exam Drill in Progress · {total_q} Questions</h3>
+                <span style="font-size: 12px; color: #cbd5e1;">Negative Marking: -{active_test['negative_rate']} per incorrect answer</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         answers: Dict[int, str] = {}
         confidences: Dict[int, str] = {}
@@ -653,8 +944,12 @@ def show_practice() -> None:
         with st.form("active_test_form"):
             for i, row in q_frame.iterrows():
                 qid = int(row["id"])
-                st.markdown(f"**{i + 1}. {row['question']}**")
-                st.caption(f"{row['subject']} · {row['topic']} · Difficulty: {row['difficulty']}")
+                is_pyq = row.get("source_type") == "Official PYQ"
+                badge_text = f"🏛️ Official PYQ ({row.get('exam_edition', '')})" if is_pyq else "🤖 Practice MCQ"
+
+                st.markdown(f"#### Question {i + 1} of {total_q}")
+                st.caption(f"{badge_text} &nbsp;|&nbsp; **Subject:** {row['subject']} &nbsp;|&nbsp; **Topic:** {row['topic']} &nbsp;|&nbsp; Difficulty: `{row['difficulty']}`")
+                st.markdown(f"**{row['question']}**")
 
                 opts = {
                     "A": str(row["option_a"]),
@@ -679,7 +974,7 @@ def show_practice() -> None:
                 confidences[qid] = conf
                 st.divider()
 
-            submitted = st.form_submit_button("Submit Test & View Analysis", type="primary")
+            submitted = st.form_submit_button("Submit Test & View Full Analysis", type="primary", use_container_width=True)
 
         if submitted:
             time_spent = round(time.time() - active_test["start_time"], 1)
@@ -1503,11 +1798,20 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    inject_custom_css()
     init_session_state()
 
-    # Sidebar Navigation
-    st.sidebar.title("📚 Question Lab")
-    st.sidebar.caption(f"v{APP_VERSION} · BPSC CCE & UPSC")
+    # Sidebar Navigation & Branding Header
+    st.sidebar.markdown(
+        f"""
+        <div class="sidebar-brand-card">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #fbbf24; font-weight: 700;">Government Examination Lab</div>
+            <div style="font-size: 18px; font-weight: 800; margin: 4px 0;">🏛️ BPSC QUESTION LAB</div>
+            <div style="font-size: 12px; color: #cbd5e1;">v{APP_VERSION} · BPSC CCE & UPSC</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     pages = [
         "Dashboard",
@@ -1530,15 +1834,17 @@ def main() -> None:
     selected_page = st.sidebar.radio("Navigate", pages, index=pages.index(default_page))
     st.session_state["nav_page"] = selected_page
 
-    st.sidebar.divider()
     st.sidebar.markdown(
-        "**Target Exam:** 71st BPSC CCE Prelims\n\n"
-        "**Syllabus Coverage:**\n"
-        "- History of India & Bihar\n"
-        "- Bihar Special Geography\n"
-        "- Indian Polity & Economy\n"
-        "- General Science & Tech\n"
-        "- Current Affairs & Bihar Schemes\n"
+        """
+        <div class="sidebar-target-box">
+            <b style="color: #1e3a8a;">🎯 Target: 71st BPSC Prelims</b><br>
+            <span style="font-size: 12px; color: #475569;">
+            • 150 MCQs · 120 Mins · Negative: -0.33<br>
+            • Focus: Bihar History, Geography, Polity, Science, Current Affairs
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     # Route to selected page

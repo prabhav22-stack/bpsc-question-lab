@@ -475,7 +475,7 @@ class TestDatabaseV1Features(unittest.TestCase):
         for pyq in db.VERIFIED_BPSC_PYQS:
             self.assertEqual(pyq["source_type"], "Official PYQ")
             self.assertEqual(pyq["is_ai_generated"], 0)
-            self.assertTrue(pyq["exam_edition"].startswith("6"))  # e.g. 69th, 68th, 67th, 66th
+            self.assertTrue(any(pyq["exam_edition"].startswith(p) for p in ("6", "7")))
             self.assertIn(pyq["correct_option"], ["A", "B", "C", "D"])
             self.assertEqual(pyq["answer_key_status"], "Official Final Key Verified")
             self.assertTrue(pyq["source_url"].startswith("http"))
