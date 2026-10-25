@@ -270,6 +270,77 @@ def show_question_bank() -> None:
 # Views: 3. AI Question Studio
 # -----------------------------------------------------------------------------
 
+SUBJECT_SUGGESTIONS: Dict[str, List[str]] = {
+    "General Science": [
+        "Cell Biology & Human Physiology",
+        "Everyday Physics & Optics",
+        "Chemical Reactions & Elements",
+        "Human Endocrine & Nervous System",
+        "Genetics & Biotechnology",
+        "Diseases, Vaccines & Public Health",
+    ],
+    "Current Affairs": [
+        "Bihar State Schemes & Policy Initiatives (Saat Nischay-2, Har Ghar Gangajal)",
+        "Bihar Economic Survey & State Budget",
+        "National & International Summits (G20, BRICS, COP)",
+        "Science, Space & Defence (ISRO, DRDO)",
+        "GI Tags & Agriculture Milestones of Bihar",
+        "Awards, Sports & Personalities",
+    ],
+    "Bihar Special": [
+        "Freedom Movement in Bihar & Babu Kunwar Singh",
+        "Bihar Physiography & River Systems",
+        "Geological Formations & Mineral Resources of Bihar",
+        "Bihar Panchayati Raj Act 2006",
+        "Ancient Magadha & Buddhist/Jain Heritage",
+    ],
+    "Modern History": [
+        "Revolt of 1857 in Bihar",
+        "Champaran Satyagraha 1917",
+        "Non-Cooperation & Civil Disobedience Movement",
+        "Quit India Movement in Bihar",
+        "Indian National Congress Sessions (Gaya 1922, Patna)",
+    ],
+    "Indian Polity": [
+        "Fundamental Rights & Constitutional Writs",
+        "President, Governor & Executive Powers",
+        "Panchayati Raj & Local Self-Government",
+        "Supreme Court, High Courts & Judicial Review",
+        "Constitutional Amendments & Statutory Commissions",
+    ],
+    "Economy": [
+        "Five Year Plans & NITI Aayog",
+        "Inflation, Monetary Policy & RBI",
+        "Agriculture, Minimum Support Price & Food Security",
+        "Public Finance, Taxation & Fiscal Policy",
+        "Bihar Industrial Investment Policies",
+    ],
+    "Geography": [
+        "Drainage System of Bihar & India",
+        "Physiographic Divisions & Mountain Passes",
+        "Indian Monsoon Climatology",
+        "Soils & Agricultural Cropping Seasons",
+        "Mineral Belts & Industrial Clusters",
+    ],
+    "Environment": [
+        "National Parks & Tiger Reserves of Bihar & India",
+        "Wetlands & Ramsar Sites",
+        "Biodiversity Hotspots & Wildlife Conservation",
+        "Global Climate Treaties & Environmental Conventions",
+    ],
+    "Ancient & Medieval History": [
+        "Indus Valley & Vedic Period",
+        "Rise of Magadha & Mauryan Administration",
+        "Buddhist & Jain Councils in Bihar",
+        "Gupta Golden Age & Nalanda University",
+        "Medieval Sultans & Mughals in Bihar",
+    ],
+    "Other": [
+        "General Studies & CSAT",
+    ],
+}
+
+
 def show_question_studio() -> None:
     """Dedicated studio to generate, inspect, edit, and save authentic-style questions."""
     st.title("✨ AI Question Studio")
@@ -290,8 +361,25 @@ def show_question_studio() -> None:
         difficulty = c3.selectbox("Difficulty", ["Easy", "Medium", "Hard", "Mixed"], index=1)
 
         c4, c5, c6 = st.columns(3)
-        topic = c4.text_input("Topic", value="Revolt of 1857 in Bihar")
-        subtopic = c5.text_input("Subtopic / Theme (Optional)", placeholder="e.g. Kunwar Singh's role, Jagdishpur")
+        suggestions = SUBJECT_SUGGESTIONS.get(subject, ["General Topic"])
+        preset_key = f"preset_topic_{subject}"
+        chosen_preset = c4.selectbox(
+            "Topic Preset (or custom)",
+            suggestions + ["Custom Topic..."],
+            key=preset_key,
+        )
+        if chosen_preset == "Custom Topic...":
+            topic = c4.text_input("Enter Custom Topic", value="", placeholder="e.g. Endocrine system", key=f"custom_topic_text_{subject}")
+            if not topic.strip():
+                topic = suggestions[0]
+        else:
+            topic = chosen_preset
+
+        subtopic = c5.text_input(
+            "Subtopic / Theme (Optional)",
+            placeholder="e.g. Key mechanisms, dates, or provisions",
+            key=f"subtopic_input_{subject}",
+        )
         count = c6.slider("Number of Questions", min_value=1, max_value=10, value=3)
 
         c7, c8 = st.columns(2)
@@ -341,6 +429,15 @@ def show_question_studio() -> None:
         if st.button("Generate Questions", type="primary"):
             with st.spinner("Retrieving BPSC PYQs and generating calibrated exam questions..."):
                 try:
+                    # Clean up all previous studio input keys to avoid stale text bleeding across generations
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("sq_"):
+                            del st.session_state[k]
+
+                    # Increment generation batch ID
+                    gen_id = st.session_state.get("studio_gen_id", 0) + 1
+                    st.session_state["studio_gen_id"] = gen_id
+
                     q_set = ai_service.generate_question_set(
                         exam=exam,
                         subject=subject,
@@ -354,7 +451,9 @@ def show_question_studio() -> None:
                     )
                     st.session_state["studio_questions"] = [q.model_dump() for q in q_set.questions]
                     st.session_state["studio_exemplars"] = q_set.retrieved_exemplars
-                    st.success(f"Generated {len(q_set.questions)} question(s) strictly calibrated against {len(q_set.retrieved_exemplars)} genuine BPSC Prelims PYQs!")
+                    st.session_state["studio_subject"] = subject
+                    st.session_state["studio_topic"] = topic
+                    st.success(f"Generated {len(q_set.questions)} question(s) on '{subject} - {topic}' strictly calibrated against {len(q_set.retrieved_exemplars)} genuine BPSC Prelims PYQs!")
                 except Exception as exc:
                     st.error(f"Generation error: {exc}")
 
@@ -375,28 +474,29 @@ def show_question_studio() -> None:
 
         st.info("💡 You can edit any question stem, options, or explanation before saving to your Question Bank.")
 
+        gen_id = st.session_state.get("studio_gen_id", 0)
         questions_to_save: List[Dict[str, Any]] = []
         for i, q in enumerate(studio_items):
             with st.expander(f"Question {i+1}: {q['question'][:80]}...", expanded=True):
-                q_text = st.text_area(f"Question #{i+1}", value=q["question"], key=f"sq_text_{i}")
+                q_text = st.text_area(f"Question #{i+1}", value=q["question"], key=f"sq_text_{gen_id}_{i}")
                 o1, o2 = st.columns(2)
-                oa = o1.text_input("Option A", value=q["option_a"], key=f"sq_oa_{i}")
-                ob = o2.text_input("Option B", value=q["option_b"], key=f"sq_ob_{i}")
-                oc = o1.text_input("Option C", value=q["option_c"], key=f"sq_oc_{i}")
-                od = o2.text_input("Option D", value=q["option_d"], key=f"sq_od_{i}")
+                oa = o1.text_input("Option A", value=q["option_a"], key=f"sq_oa_{gen_id}_{i}")
+                ob = o2.text_input("Option B", value=q["option_b"], key=f"sq_ob_{gen_id}_{i}")
+                oc = o1.text_input("Option C", value=q["option_c"], key=f"sq_oc_{gen_id}_{i}")
+                od = o2.text_input("Option D", value=q["option_d"], key=f"sq_od_{gen_id}_{i}")
 
                 curr_idx = ["A", "B", "C", "D"].index(q["correct_option"]) if q["correct_option"] in ["A", "B", "C", "D"] else 0
-                correct_opt = st.radio("Correct Answer", ["A", "B", "C", "D"], index=curr_idx, horizontal=True, key=f"sq_cor_{i}")
+                correct_opt = st.radio("Correct Answer", ["A", "B", "C", "D"], index=curr_idx, horizontal=True, key=f"sq_cor_{gen_id}_{i}")
 
-                exp_text = st.text_area("Explanation", value=q.get("explanation", ""), key=f"sq_exp_{i}")
-                dist_text = st.text_input("Distractor Notes", value=q.get("distractor_notes", ""), key=f"sq_dist_{i}")
-                concept_tested = st.text_input("Concept Tested", value=q.get("concept_tested", ""), key=f"sq_con_{i}")
+                exp_text = st.text_area("Explanation", value=q.get("explanation", ""), key=f"sq_exp_{gen_id}_{i}")
+                dist_text = st.text_input("Distractor Notes", value=q.get("distractor_notes", ""), key=f"sq_dist_{gen_id}_{i}")
+                concept_tested = st.text_input("Concept Tested", value=q.get("concept_tested", ""), key=f"sq_con_{gen_id}_{i}")
 
                 questions_to_save.append({
                     "exam": exam,
-                    "subject": subject,
-                    "topic": topic.strip() or "General",
-                    "subtopic": subtopic.strip(),
+                    "subject": q.get("subject") or subject,
+                    "topic": q.get("topic") or topic.strip() or "General",
+                    "subtopic": q.get("subtopic") or subtopic.strip(),
                     "question": q_text.strip(),
                     "option_a": oa.strip(),
                     "option_b": ob.strip(),
@@ -422,10 +522,16 @@ def show_question_studio() -> None:
                 saved_count += 1
             st.success(f"Saved {saved_count} questions into your Question Bank!")
             st.session_state["studio_questions"] = None
+            for k in list(st.session_state.keys()):
+                if k.startswith("sq_"):
+                    del st.session_state[k]
             st.rerun()
 
         if col_clear.button("Discard Set"):
             st.session_state["studio_questions"] = None
+            for k in list(st.session_state.keys()):
+                if k.startswith("sq_"):
+                    del st.session_state[k]
             st.rerun()
 
 
@@ -954,22 +1060,247 @@ def show_revision_planner() -> None:
 # Views: 9. Current Affairs & Sources
 # -----------------------------------------------------------------------------
 
+CURATED_CURRENT_AFFAIRS_CAPSULES = [
+    {
+        "title": "🏆 Bharat Ratna 2024 to Jan Nayak Karpoori Thakur",
+        "category": "Awards & Personalities",
+        "topic": "Karpoori Thakur Bharat Ratna 2024",
+        "summary": "Former Bihar Chief Minister Karpoori Thakur was posthumously awarded the Bharat Ratna (India's highest civilian award) in January 2024 on his centenary birth anniversary. Known as 'Jan Nayak' (People's Hero), he served as Bihar Chief Minister twice (1970-71 and 1977-79). He was a pioneer in implementing the Mungeri Lal Commission recommendations in 1978, which introduced the Karpoori Thakur Formula creating sub-quotas for Extremely Backward Classes (EBCs), backward women, and economically weaker sections decades before central implementations.",
+        "key_facts": [
+            "Centenary birth anniversary: 24 January 2024.",
+            "Served as Bihar Chief Minister twice (December 1970 – June 1971; June 1977 – April 1979).",
+            "Pioneered the 'Karpoori Thakur Formula' in 1978 based on the Mungeri Lal Commission report.",
+            "Abolished English as a compulsory requirement for matriculation exams in Bihar to benefit rural students.",
+        ],
+    },
+    {
+        "title": "📊 Bihar Caste-Based Survey 2023 (Findings & Socio-Economic Report)",
+        "category": "State Demographics & Policy",
+        "topic": "Bihar Caste Survey 2023",
+        "summary": "Bihar became the first state in post-independence India to conduct and release a comprehensive caste-based enumeration and socio-economic survey in October 2023. The total enumerated population of Bihar is 13,07,25,310 (13.07 crore). Extremely Backward Classes (EBCs) constitute 36.01%, Other Backward Classes (OBCs) 27.13%, Scheduled Castes (SC) 19.65%, Scheduled Tribes (ST) 1.68%, and General Category (Unreserved) 15.52%. The findings led to the enactment of the Bihar Reservation of Vacancies in Posts and Services (Amendment) Act, 2023.",
+        "key_facts": [
+            "Total Population: 13,07,25,310 (13.07 crore).",
+            "Social Categories: EBC (36.01%), OBC (27.13%), SC (19.65%), ST (1.68%), General (15.52%).",
+            "Religious Breakdown: Hindu (81.99%), Muslim (17.70%), Christian (0.05%), Sikh (0.01%).",
+            "Poverty & Livelihood: 34.13% of all families in Bihar (94 lakh families) earn less than ₹6,000 per month.",
+        ],
+    },
+    {
+        "title": "🌾 GI Tags of Bihar (Mircha Rice & Agri-Products)",
+        "category": "GI Tags & Agriculture",
+        "topic": "GI Tags of Bihar",
+        "summary": "Bihar holds prestigious Geographical Indication (GI) tags for distinct agricultural and confectionery products. In 2023, 'Mircha Rice' (Marcha Dhan) of West Champaran district received the GI tag for its distinct aroma, black pepper-like appearance, and flaking qualities. Previous celebrated GI tagged items include Mithila Makhana (Fox nut), Shahi Litchi of Muzaffarpur, Zardalu Mango of Bhagalpur, Katarni Rice of Bhagalpur/Banka, Magahi Paan of Magadh, and Silao Khaja of Nalanda.",
+        "key_facts": [
+            "Mircha Rice (Marcha Chawal): West Champaran (Mainatand, Gaunaha, Narkatiaganj).",
+            "Mithila Makhana: Awarded GI tag in 2022 under Agriculture class.",
+            "Shahi Litchi: Muzaffarpur, Vaishali, Samastipur; registered in 2018.",
+            "Zardalu Mango & Katarni Rice: Bhagalpur and Banka districts.",
+            "Magahi Paan: Nawada, Aurangabad, Gaya, and Nalanda.",
+        ],
+    },
+    {
+        "title": "💧 Har Ghar Gangajal Project (Gangajal Aapurti Yojana)",
+        "category": "Bihar Infrastructure & Schemes",
+        "topic": "Har Ghar Gangajal Project",
+        "summary": "Under the Jal-Jeevan-Hariyali campaign, the Government of Bihar launched the pioneering 'Gangajal Aapurti Yojana' (Har Ghar Gangajal) in November 2022. It lifts surplus floodwaters of the Ganga river during the four monsoon months from Hathidah (Mokama) and transports it through a 151-km pipeline network to provide clean treated drinking water to water-stressed southern heritage cities: Rajgir, Gaya, Bodh Gaya, and Nawada.",
+        "key_facts": [
+            "Inaugurated by Chief Minister Nitish Kumar at Rajgir (November 2022).",
+            "Beneficiary Cities: Rajgir, Gaya, Bodh Gaya, and Nawada.",
+            "Source: Hathidah (Patna district) via 151-km underground pipeline.",
+            "Water storage reservoirs built at Tetar (Gaya), Ghoda Katora (Rajgir).",
+        ],
+    },
+    {
+        "title": "🌱 Saat Nischay-2 (2020–2025) Key Targets",
+        "category": "Bihar Development Agenda",
+        "topic": "Saat Nischay-2",
+        "summary": "The Government of Bihar launched the second phase of Seven Resolves (Saat Nischay-2) for the period 2020–2025 to achieve inclusive good governance and sustainable growth. The 7 core components are: 1. Yuva Shakti - Bihar ki Pragati; 2. Sashakt Mahila - Saksham Mahila; 3. Har Khet Tak Sinchai Ka Pani; 4. Swachh Gaon - Samriddh Gaon; 5. Swachh Shahar - Viksit Shahar; 6. Sulabh Samparkata; 7. Sabke Liye Atirikt Swasthya Suvidha.",
+        "key_facts": [
+            "Yuva Shakti: Mega skill centers in all 38 districts, Bihar Skill Development Mission.",
+            "Sashakt Mahila: Financial assistance for intermediate and graduate pass unmarried girls; Mukhyamantri Mahila Udyami Yojana.",
+            "Har Khet Tak Sinchai: Irrigation water access for every agricultural field.",
+            "Swachh Shahar / Gaon: Solid waste management, solar street lights in all wards.",
+        ],
+    },
+    {
+        "title": "🐅 Wildlife & Environment: Valmiki & Proposed Kaimur Tiger Reserve",
+        "category": "Environment & Biodiversity",
+        "topic": "Valmiki & Kaimur Tiger Reserves",
+        "summary": "Valmiki National Park & Tiger Reserve in West Champaran is currently the only declared tiger reserve in Bihar, reporting a rising tiger population (54 tigers in recent census). In 2023-2024, the state government constituted a Rhino Task Force to reintroduce one-horned rhinoceroses in Valmiki Tiger Reserve under the National Rhino Conservation Strategy. Additionally, the National Tiger Conservation Authority (NTCA) approved Kaimur Wildlife Sanctuary to be declared Bihar's second tiger reserve.",
+        "key_facts": [
+            "Valmiki Tiger Reserve: West Champaran, contiguous with Chitwan National Park (Nepal).",
+            "Second Tiger Reserve: Proposed in Kaimur Wildlife Sanctuary (spanning Kaimur & Rohtas).",
+            "Rhino Task Force: Set up to reintroduce rhinos in VTR.",
+            "Gharial breeding sanctuary: Gandak River stretch in Bihar.",
+        ],
+    },
+]
+
+
 def show_current_affairs() -> None:
-    """Source-aware research and syllabus fact synthesis with citations."""
-    st.title("🌐 Current Affairs & Source Research")
-    st.write("Extract high-yield exam facts, policy highlights, and Bihar-specific angles with verifiable citations.")
+    """Dedicated Current Affairs Hub: Instant MCQ generation, real-time research, and high-yield BPSC capsules."""
+    st.title("📰 Current Affairs & News Lab")
+    st.write(
+        "Master high-yield National, International, and Bihar Current Affairs for BPSC CCE and UPSC Prelims. "
+        "Generate multi-statement practice MCQs, synthesize live policy developments with Google search grounding, and revise high-yield capsules."
+    )
 
     if not config.is_gemini_configured():
-        st.warning("⚠️ Gemini API is not configured. Please add `GEMINI_API_KEY` to enable research synthesis.")
+        st.warning("⚠️ Gemini API is not configured. Please add `GEMINI_API_KEY` to enable current affairs synthesis.")
         return
 
-    with st.container(border=True):
-        st.subheader("Research Syllabus Topic")
-        q_text = st.text_input("Enter topic, government scheme, or policy development", value="Bihar Industrial Investment Promotion Policy")
-        bihar_angle = st.checkbox("Include Bihar-specific angle & state budget linkage", value=True)
+    tab1, tab2, tab3 = st.tabs([
+        "⚡ Instant Current Affairs MCQs",
+        "🔍 Live Policy & Topic Research",
+        "📌 High-Yield BPSC Capsules",
+    ])
 
-        if st.button("🔍 Research & Synthesize", type="primary"):
-            with st.spinner("Synthesizing verified exam facts..."):
+    # ---------------------------------------------------------
+    # TAB 1: Instant Current Affairs MCQ Studio
+    # ---------------------------------------------------------
+    with tab1:
+        st.subheader("Generate BPSC Current Affairs Practice Sets")
+        st.write("Current Affairs accounts for 25–30 questions in BPSC Prelims. Generate targeted questions matching recent exam patterns.")
+
+        c_ca1, c_ca2, c_ca3 = st.columns(3)
+        ca_category = c_ca1.selectbox(
+            "Current Affairs Theme",
+            [
+                "Bihar State Schemes & Policy Initiatives (Saat Nischay-2, Har Ghar Gangajal)",
+                "Bihar Economic Survey & State Budget Highlights",
+                "National & International Summits (G20, BRICS, COP)",
+                "Science, Space & Defence (ISRO, DRDO)",
+                "GI Tags & Agriculture Milestones of Bihar",
+                "Awards, Honors, Sports & Personalities",
+                "National Appointments & Constitutional Commissions",
+            ],
+            index=0,
+            key="ca_theme_select",
+        )
+        ca_qtype = c_ca2.selectbox(
+            "Question Style",
+            ["Statement-based (1 and 2 only, etc.)", "Standard MCQ", "Matching Columns"],
+            index=0,
+            key="ca_qtype_select",
+        )
+        ca_count = c_ca3.slider("Number of Questions", min_value=1, max_value=10, value=3, key="ca_count_slider")
+
+        c_ca4, c_ca5 = st.columns(2)
+        ca_diff = c_ca4.selectbox("Difficulty", ["Medium", "Hard"], index=0, key="ca_diff_select")
+        ca_timeframe = c_ca5.selectbox("Timeframe Focus", ["Last 6 Months (BPSC High-Yield)", "Last 1 Year", "Recent State Initiatives"], key="ca_time_select")
+
+        # Show available official PYQ exemplars
+        ca_exemplars = db.retrieve_pyq_exemplars(subject="Current Affairs", topic=ca_category[:20], limit=2)
+        if ca_exemplars:
+            st.caption(f"🏛️ Strict BPSC Benchmark Active: Will calibrate against {len(ca_exemplars)} genuine Current Affairs PYQs from 68th/69th BPSC Prelims.")
+
+        if st.button("⚡ Generate Current Affairs Questions", type="primary", key="btn_gen_ca"):
+            with st.spinner("Generating authenticated Current Affairs questions..."):
+                try:
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("ca_sq_"):
+                            del st.session_state[k]
+                    gen_id = st.session_state.get("ca_gen_id", 0) + 1
+                    st.session_state["ca_gen_id"] = gen_id
+
+                    q_set = ai_service.generate_question_set(
+                        exam="BPSC",
+                        subject="Current Affairs",
+                        topic=ca_category,
+                        subtopic=ca_timeframe,
+                        count=ca_count,
+                        difficulty=ca_diff,
+                        question_type=ca_qtype,
+                        focus="Tricky distractor elimination",
+                        notes_or_context=f"Focus on recent verified civil services developments relevant for BPSC Prelims: {ca_timeframe}.",
+                    )
+                    st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
+                    st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
+                    st.success(f"Generated {len(q_set.questions)} Current Affairs question(s) successfully!")
+                except Exception as exc:
+                    st.error(f"Generation failed: {exc}")
+
+        # Render generated CA questions
+        ca_items = st.session_state.get("ca_questions")
+        if ca_items:
+            st.divider()
+            st.subheader(f"Review & Save Generated Current Affairs Questions ({len(ca_items)})")
+            ca_gen_id = st.session_state.get("ca_gen_id", 0)
+            ca_to_save: List[Dict[str, Any]] = []
+
+            for idx, q in enumerate(ca_items):
+                with st.expander(f"Question #{idx+1}: {q['question'][:80]}...", expanded=True):
+                    q_text = st.text_area(f"Question Statement", value=q["question"], key=f"ca_sq_text_{ca_gen_id}_{idx}")
+                    co1, co2 = st.columns(2)
+                    oa = co1.text_input("Option A", value=q["option_a"], key=f"ca_sq_oa_{ca_gen_id}_{idx}")
+                    ob = co2.text_input("Option B", value=q["option_b"], key=f"ca_sq_ob_{ca_gen_id}_{idx}")
+                    oc = co1.text_input("Option C", value=q["option_c"], key=f"ca_sq_oc_{ca_gen_id}_{idx}")
+                    od = co2.text_input("Option D", value=q["option_d"], key=f"ca_sq_od_{ca_gen_id}_{idx}")
+
+                    curr_idx = ["A", "B", "C", "D"].index(q["correct_option"]) if q["correct_option"] in ["A", "B", "C", "D"] else 0
+                    cor_opt = st.radio("Correct Answer", ["A", "B", "C", "D"], index=curr_idx, horizontal=True, key=f"ca_sq_cor_{ca_gen_id}_{idx}")
+                    exp = st.text_area("Explanation", value=q.get("explanation", ""), key=f"ca_sq_exp_{ca_gen_id}_{idx}")
+                    dist = st.text_input("Distractor Notes", value=q.get("distractor_notes", ""), key=f"ca_sq_dist_{ca_gen_id}_{idx}")
+
+                    ca_to_save.append({
+                        "exam": "BPSC",
+                        "subject": "Current Affairs",
+                        "topic": q.get("topic") or ca_category,
+                        "subtopic": ca_timeframe,
+                        "question": q_text.strip(),
+                        "option_a": oa.strip(),
+                        "option_b": ob.strip(),
+                        "option_c": oc.strip(),
+                        "option_d": od.strip(),
+                        "correct_option": cor_opt,
+                        "explanation": exp.strip(),
+                        "distractor_notes": dist.strip(),
+                        "concept_tested": q.get("concept_tested", "Current Affairs"),
+                        "question_type": ca_qtype,
+                        "source_type": "AI-generated",
+                        "source_name": "Current Affairs Lab",
+                        "source_url": "",
+                        "difficulty": ca_diff,
+                        "is_ai_generated": 1,
+                    })
+
+            col_s, col_d = st.columns([2, 1])
+            if col_s.button("💾 Save All to Question Bank", type="primary", key="save_ca_bank"):
+                cnt = 0
+                for item in ca_to_save:
+                    db.add_question(item)
+                    cnt += 1
+                st.success(f"Saved {cnt} Current Affairs questions to your Question Bank!")
+                st.session_state["ca_questions"] = None
+                for k in list(st.session_state.keys()):
+                    if k.startswith("ca_sq_"):
+                        del st.session_state[k]
+                st.rerun()
+
+            if col_d.button("Discard Set", key="discard_ca_bank"):
+                st.session_state["ca_questions"] = None
+                for k in list(st.session_state.keys()):
+                    if k.startswith("ca_sq_"):
+                        del st.session_state[k]
+                st.rerun()
+
+    # ---------------------------------------------------------
+    # TAB 2: Live Policy & Topic Research
+    # ---------------------------------------------------------
+    with tab2:
+        st.subheader("Live Policy Research with Google Search Grounding")
+        st.write("Research any recent government announcement, scheme, or event to get high-yield exam points with verified source citations.")
+
+        col_rq1, col_rq2 = st.columns([3, 1])
+        q_text = col_rq1.text_input(
+            "Enter policy, scheme, or current event",
+            value="Bihar Industrial Investment Promotion Policy and IT Policy 2024",
+            key="ca_research_input",
+        )
+        bihar_angle = col_rq2.checkbox("Include Bihar angle & state budget", value=True, key="ca_bihar_check")
+
+        if st.button("🔍 Research & Ground with Citations", type="primary", key="btn_ca_research"):
+            with st.spinner("Retrieving verified facts and citations..."):
                 try:
                     summary_text, citations = ai_service.research_topic_with_grounding(
                         query=q_text, include_bihar_angle=bihar_angle
@@ -983,30 +1314,82 @@ def show_current_affairs() -> None:
                 except Exception as exc:
                     st.error(f"Research failed: {exc}")
 
-    res = st.session_state.get("research_result")
-    if res:
-        st.subheader(f"Synthesis: {res['topic']}")
-        st.markdown(res["text"])
+        res = st.session_state.get("research_result")
+        if res:
+            st.divider()
+            st.subheader(f"Synthesis: {res['topic']}")
+            st.markdown(res["text"])
 
-        if res["citations"]:
-            st.markdown("#### 🔗 Retrieved Sources & Grounding Citations")
-            for c in res["citations"]:
-                st.markdown(f"- [{c['title']}]({c['url']})")
+            if res["citations"]:
+                st.markdown("#### 🔗 Retrieved Sources & Grounding Citations")
+                for c in res["citations"]:
+                    st.markdown(f"- [{c['title']}]({c['url']})")
 
-        c_save, c_gen = st.columns(2)
-        if c_save.button("💾 Save Research Notes"):
-            db.save_research_note(
-                topic=res["topic"],
-                title=res["topic"],
-                summary=res["text"],
-                key_facts=[],
-                bihar_angle="Included" if bihar_angle else "",
-            )
-            st.success("Saved to Research Notes!")
+            c_save, c_gen = st.columns(2)
+            if c_save.button("💾 Save Research Notes", key="save_res_btn"):
+                db.save_research_note(
+                    topic=res["topic"],
+                    title=res["topic"],
+                    summary=res["text"],
+                    key_facts=[],
+                    bihar_angle="Included" if bihar_angle else "",
+                )
+                st.success("Saved to Research Notes!")
 
-        if c_gen.button("✨ Generate MCQs from this Research"):
-            st.session_state["nav_page"] = "AI Question Studio"
-            st.rerun()
+            if c_gen.button("✨ Generate 3 MCQs from this Research", key="gen_from_res_btn"):
+                with st.spinner("Generating exam MCQs from research notes..."):
+                    try:
+                        q_set = ai_service.generate_question_set(
+                            exam="BPSC",
+                            subject="Current Affairs",
+                            topic=res["topic"],
+                            subtopic="Research Note Synthesis",
+                            count=3,
+                            difficulty="Medium",
+                            question_type="Statement-based (1 and 2 only, etc.)",
+                            focus="PYQ-inspired practice",
+                            notes_or_context=res["text"],
+                        )
+                        st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
+                        st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
+                        st.success("Generated 3 questions! Check the 'Instant Current Affairs MCQs' tab to review and save them.")
+                    except Exception as exc:
+                        st.error(f"Generation error: {exc}")
+
+    # ---------------------------------------------------------
+    # TAB 3: High-Yield BPSC Capsules (Ready Bank)
+    # ---------------------------------------------------------
+    with tab3:
+        st.subheader("High-Yield BPSC Current Affairs Capsules")
+        st.write("Curated, syllabus-linked facts on the highest-yield topics for the upcoming 71st BPSC CCE Prelims.")
+
+        for cap in CURATED_CURRENT_AFFAIRS_CAPSULES:
+            with st.expander(f"{cap['title']} · *{cap['category']}*", expanded=False):
+                st.markdown(f"**Executive Summary:** {cap['summary']}")
+                st.markdown("**Key Examination Facts to Remember:**")
+                for fact in cap["key_facts"]:
+                    st.markdown(f"- {fact}")
+
+                if st.button(f"🎯 Generate 3 Questions on: {cap['topic']}", key=f"btn_cap_{cap['topic']}"):
+                    with st.spinner(f"Generating questions on {cap['topic']}..."):
+                        try:
+                            context_str = cap["summary"] + "\nKey Facts:\n" + "\n".join(cap["key_facts"])
+                            q_set = ai_service.generate_question_set(
+                                exam="BPSC",
+                                subject="Current Affairs",
+                                topic=cap["topic"],
+                                subtopic=cap["category"],
+                                count=3,
+                                difficulty="Hard",
+                                question_type="Statement-based (1 and 2 only, etc.)",
+                                focus="Tricky distractor elimination",
+                                notes_or_context=context_str,
+                            )
+                            st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
+                            st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
+                            st.success(f"Generated 3 questions on {cap['topic']}! Switch to 'Instant Current Affairs MCQs' tab to review and save.")
+                        except Exception as exc:
+                            st.error(f"Generation error: {exc}")
 
 
 # -----------------------------------------------------------------------------
@@ -1130,12 +1513,12 @@ def main() -> None:
         "Dashboard",
         "Question Bank",
         "AI Question Studio",
+        "Current Affairs Lab",
         "Practice & Mock Tests",
         "AI Study Tutor",
         "AI Performance Coach",
         "Error Notebook",
         "Revision Planner",
-        "Current Affairs & Sources",
         "Settings & Data",
     ]
 
@@ -1155,7 +1538,7 @@ def main() -> None:
         "- Bihar Special Geography\n"
         "- Indian Polity & Economy\n"
         "- General Science & Tech\n"
-        "- Current Affairs\n"
+        "- Current Affairs & Bihar Schemes\n"
     )
 
     # Route to selected page
@@ -1165,6 +1548,8 @@ def main() -> None:
         show_question_bank()
     elif selected_page == "AI Question Studio":
         show_question_studio()
+    elif selected_page in ["Current Affairs Lab", "Current Affairs & Sources"]:
+        show_current_affairs()
     elif selected_page == "Practice & Mock Tests":
         show_practice()
     elif selected_page == "AI Study Tutor":
@@ -1175,8 +1560,6 @@ def main() -> None:
         show_error_notebook()
     elif selected_page == "Revision Planner":
         show_revision_planner()
-    elif selected_page == "Current Affairs & Sources":
-        show_current_affairs()
     elif selected_page == "Settings & Data":
         show_settings()
 
