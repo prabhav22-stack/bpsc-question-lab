@@ -44,6 +44,8 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - **Zero Loss of Accuracy Guarantee**: Includes an intelligent MCQ heuristic evaluator (`evaluate_ocr_quality`). If local OCR yields degraded, faded, or insufficient text (< 50 chars or lacking MCQ structure), it **automatically falls back to Gemini Multimodal Vision**, guaranteeing zero lost questions.
    - **OCR Strategy & Engine Selector**: Choose between `⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)`, `👁️ Gemini Multimodal Vision Only`, or `💻 Local OCR Only`, with priority ordering between RapidOCR, PaddleOCR, and Pytesseract.
    - **Deployment-Ready Cloud Packages (`packages.txt`)**: Preconfigured with `tesseract-ocr` and `tesseract-ocr-eng` for automatic apt-get installation on Streamlit Cloud containers.
+   - **Automatic Hindi-to-English Mock Paper Translator**: When extracting mock PDF papers containing Hindi or bilingual questions, automatically translates stems, options, and explanations into standard, academic English suitable for BPSC/UPSC Civil Services preparation, while preserving the authentic Hindi source stem in `original_question_hindi` for provenance verification.
+   - **On-Demand Hindi Card Translator**: Any Hindi question in the Question Bank is automatically badged with `🇮🇳 Hindi` and features an instant `🌐 Translate to English` action button with live database updates.
    - **Deterministic Syllabus Subject Sorting**: Automatically sorts extracted questions into the 10 standard syllabus subjects (`Modern History`, `Ancient & Medieval History`, `Bihar Special`, `Geography`, `Indian Polity`, `Economy`, `General Science`, `Environment`, `Current Affairs`, `Other`).
    - **PDF Filename & Hash Duplicate Detection**: Automatically tracks uploaded PDF filenames and SHA-256 hashes in `uploaded_mock_files` to prevent re-uploading the same mock test paper.
    - **Intra-Batch & Question Bank Deduplication**: Normalizes question stems (stripping numbering, whitespace, punctuation) to ensure no question is repeated twice or thrice.
@@ -82,7 +84,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 56 tests (19 legacy regression tests + 24 v1.0 feature tests + 13 mock questions, background OCR, deduplication & PDF extractor tests):
+Run all 59 tests (19 legacy regression tests + 24 v1.0 feature tests + 16 mock questions, background OCR, deduplication, translation & PDF extractor tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

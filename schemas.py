@@ -183,6 +183,14 @@ class ExtractedMockQuestion(BaseModel):
         default="Standard MCQ",
         description="Question format (Standard MCQ, Statement-based, Assertion-Reason, Matching, etc.).",
     )
+    original_language: str = Field(
+        default="English",
+        description="Original language of the question in the document ('English', 'Hindi', 'Bilingual').",
+    )
+    original_question_hindi: str = Field(
+        default="",
+        description="The original Hindi question text if translated, preserving source wording.",
+    )
 
     @field_validator("subject", mode="before")
     @classmethod

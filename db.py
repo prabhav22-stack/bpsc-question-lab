@@ -1626,6 +1626,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE questions ADD COLUMN official_qno INTEGER NOT NULL DEFAULT 0")
         if "answer_key_status" not in q_cols:
             conn.execute("ALTER TABLE questions ADD COLUMN answer_key_status TEXT NOT NULL DEFAULT 'Unverified'")
+        if "original_language" not in q_cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN original_language TEXT NOT NULL DEFAULT 'English'")
+        if "original_question_hindi" not in q_cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN original_question_hindi TEXT NOT NULL DEFAULT ''")
         if "normalized_stem" not in q_cols:
             conn.execute("ALTER TABLE questions ADD COLUMN normalized_stem TEXT NOT NULL DEFAULT ''")
             try:
@@ -1829,6 +1833,8 @@ def insert_question(conn: sqlite3.Connection, item: Dict[str, Any]) -> int:
     payload.setdefault("paper_set", "")
     payload.setdefault("official_qno", 0)
     payload.setdefault("answer_key_status", "Unverified")
+    payload.setdefault("original_language", "English")
+    payload.setdefault("original_question_hindi", "")
     if "normalized_stem" not in payload or not payload["normalized_stem"]:
         payload["normalized_stem"] = normalize_question_text(payload.get("question", ""))
     if "created_at" not in payload:
@@ -2165,6 +2171,26 @@ def add_questions_batch(items: List[Dict[str, Any]], skip_if_duplicate: bool = F
                 pass
         conn.commit()
         return inserted_cnt
+
+
+def update_question_fields(question_id: int, fields: Dict[str, Any]) -> bool:
+    """Safely update specific fields (e.g. translated question, options, explanation) for a question."""
+    if not fields or question_id <= 0:
+        return False
+    with connect_db() as conn:
+        existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()}
+        valid_fields = {k: v for k, v in fields.items() if k in existing_cols}
+        if not valid_fields:
+            return False
+
+        if "question" in valid_fields and ("normalized_stem" not in valid_fields or not valid_fields["normalized_stem"]):
+            valid_fields["normalized_stem"] = normalize_question_text(valid_fields["question"])
+
+        set_clauses = ", ".join(f"{k} = ?" for k in valid_fields.keys())
+        params = list(valid_fields.values()) + [question_id]
+        cur = conn.execute(f"UPDATE questions SET {set_clauses} WHERE id = ?", params)
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def list_questions(

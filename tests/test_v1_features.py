@@ -101,6 +101,24 @@ class TestSchemaValidation(unittest.TestCase):
         )
         self.assertEqual(diag.suggested_error_type, "Knowledge gap")
 
+    def test_hindi_mock_question_schema(self):
+        """Verify ExtractedMockQuestion accepts original_language and original_question_hindi."""
+        mq = schemas.ExtractedMockQuestion(
+            question="Which article of the Constitution provides for the Election Commission?",
+            option_a="Article 324",
+            option_b="Article 356",
+            option_c="Article 280",
+            option_d="Article 370",
+            correct_option="A",
+            explanation="Article 324 provides for the Election Commission.",
+            subject="Polity",
+            topic="Election Commission",
+            original_language="Hindi",
+            original_question_hindi="संविधान का कौन सा अनुच्छेद निर्वाचन आयोग का प्रावधान करता है?",
+        )
+        self.assertEqual(mq.original_language, "Hindi")
+        self.assertIn("निर्वाचन आयोग", mq.original_question_hindi)
+
 
 class TestAnalyticsCalculations(unittest.TestCase):
     """Test deterministic analytics engine."""
@@ -372,6 +390,33 @@ class TestMockedAIService(unittest.TestCase):
                 self.assertNotIn(fake_secret, res["message"])
                 self.assertIn("••••••••", res["message"])
 
+    def test_translate_hindi_question_to_english(self):
+        """Verify translating Hindi question with mocked Gemini response."""
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = json.dumps({
+            "question": "Which article of the Indian Constitution provides for the Election Commission?",
+            "option_a": "Article 324",
+            "option_b": "Article 356",
+            "option_c": "Article 280",
+            "option_d": "Article 370",
+            "explanation": "Article 324 vests the superintendence, direction, and control of elections in an Election Commission.",
+        })
+        mock_client.models.generate_content.return_value = mock_resp
+
+        with patch("ai_service.is_gemini_configured", return_value=True), \
+             patch("ai_service._get_client", return_value=mock_client):
+            res = ai_service.translate_hindi_question_to_english(
+                question="संविधान का कौन सा अनुच्छेद निर्वाचन आयोग का प्रावधान करता है?",
+                option_a="अनुच्छेद 324",
+                option_b="अनुच्छेद 356",
+                option_c="अनुच्छेद 280",
+                option_d="अनुच्छेद 370",
+                explanation="अनुच्छेद 324 निर्वाचन आयोग से संबंधित है।",
+            )
+            self.assertEqual(res["question"], "Which article of the Indian Constitution provides for the Election Commission?")
+            self.assertEqual(res["option_a"], "Article 324")
+
 
 class TestDatabaseV1Features(unittest.TestCase):
     """Test additive database features using an in-memory SQLite connection."""
@@ -401,6 +446,9 @@ class TestDatabaseV1Features(unittest.TestCase):
                 source_url TEXT NOT NULL DEFAULT '',
                 difficulty TEXT NOT NULL DEFAULT 'Medium',
                 is_ai_generated INTEGER NOT NULL DEFAULT 0,
+                original_language TEXT NOT NULL DEFAULT 'English',
+                original_question_hindi TEXT NOT NULL DEFAULT '',
+                normalized_stem TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             )
         """)
@@ -490,6 +538,34 @@ class TestDatabaseV1Features(unittest.TestCase):
             self.assertIn(ex["correct_option"], ["A", "B", "C", "D"])
             self.assertTrue(ex["exam_edition"].startswith("6") or "BPSC" in ex["exam_edition"])
 
+    def test_update_question_fields(self):
+        """Verify update_question_fields updates question fields and recomputes normalized_stem."""
+        qid = db.insert_question(self.conn, {
+            "question": "संविधान का कौन सा अनुच्छेद?",
+            "option_a": "A",
+            "option_b": "B",
+            "option_c": "C",
+            "option_d": "D",
+            "correct_option": "A",
+            "subject": "Polity",
+            "original_language": "Hindi",
+        })
+        self.conn.commit()
+
+        # Mock connect_db to return self.conn
+        with patch("db.connect_db") as mock_conn_fn:
+            mock_conn_fn.return_value.__enter__.return_value = self.conn
+            updated = db.update_question_fields(qid, {
+                "question": "Which article of the Constitution?",
+                "original_question_hindi": "संविधान का कौन सा अनुच्छेद?",
+            })
+            self.assertTrue(updated)
+
+        row = self.conn.execute("SELECT question, original_question_hindi, normalized_stem FROM questions WHERE id = ?", (qid,)).fetchone()
+        self.assertEqual(row["question"], "Which article of the Constitution?")
+        self.assertEqual(row["original_question_hindi"], "संविधान का कौन सा अनुच्छेद?")
+        self.assertIn("which article of the constitution", row["normalized_stem"])
+
 
 class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
     """Test suite for Mock Questions database features and PDF OCR extraction pipeline."""
@@ -524,7 +600,10 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
                 exam_year TEXT NOT NULL DEFAULT '',
                 paper_set TEXT NOT NULL DEFAULT '',
                 official_qno INTEGER NOT NULL DEFAULT 0,
-                answer_key_status TEXT NOT NULL DEFAULT 'Unverified'
+                answer_key_status TEXT NOT NULL DEFAULT 'Unverified',
+                original_language TEXT NOT NULL DEFAULT 'English',
+                original_question_hindi TEXT NOT NULL DEFAULT '',
+                normalized_stem TEXT NOT NULL DEFAULT ''
             )
         """)
         self.conn.commit()

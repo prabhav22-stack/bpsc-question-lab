@@ -1134,6 +1134,11 @@ def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool
         except Exception:
             pass
 
+    q_text = str(q.get("question", ""))
+    has_hindi = bool(re.search(r'[\u0900-\u097F]', q_text))
+    if has_hindi:
+        provenance_line += " · <span class='lab-badge' style='background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35); font-weight: 600;'>🇮🇳 Hindi</span>"
+
     with st.container(border=True):
         st.markdown(f"#### Question #{qid if qid > 0 else '•'}: {q['question']}")
         st.markdown(provenance_line, unsafe_allow_html=True)
@@ -1143,6 +1148,10 @@ def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool
             f"- **C.** {q['option_c']}\n"
             f"- **D.** {q['option_d']}"
         )
+        if q.get("original_question_hindi"):
+            with st.expander("🇮🇳 View Original Hindi Source Stem", expanded=False):
+                st.write(q["original_question_hindi"])
+
         with st.expander("Reveal Correct Option & Explanation", expanded=False):
             st.info(
                 f"**Correct Option:** `{q['correct_option']}`\n\n"
@@ -1152,16 +1161,16 @@ def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool
                 st.caption(f"**Distractor Analysis:** {q['distractor_notes']}")
 
         if show_actions and qid > 0:
-            b1, b2 = st.columns([1, 1])
+            act_cols = st.columns([1, 1, 1] if (has_hindi and config.is_gemini_configured()) else [1, 1])
             pin_lbl = "📌 Unpin Question" if is_pinned else "📍 Pin for Revision"
-            if b1.button(pin_lbl, key=f"{key_prefix}_pin_{qid}"):
+            if act_cols[0].button(pin_lbl, key=f"{key_prefix}_pin_{qid}"):
                 if is_pinned:
                     db.unpin_question(qid)
                 else:
                     db.pin_question(qid, note=f"Pinned from Question Bank ({q.get('topic', '')})")
                 st.rerun()
 
-            if config.is_gemini_configured() and b2.button("🎓 Discuss with AI Tutor", key=f"{key_prefix}_tutor_{qid}"):
+            if config.is_gemini_configured() and act_cols[1].button("🎓 Discuss with AI Tutor", key=f"{key_prefix}_tutor_{qid}"):
                 opts_map = {
                     "A": str(q["option_a"]),
                     "B": str(q["option_b"]),
@@ -1181,6 +1190,25 @@ def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool
                     "topic": q["topic"],
                 }
                 navigate_to("AI Study Tutor")
+
+            if has_hindi and config.is_gemini_configured() and act_cols[2].button("🌐 Translate to English", key=f"{key_prefix}_trans_{qid}"):
+                with st.spinner("Translating question to academic English with Gemini AI..."):
+                    try:
+                        translated = ai_service.translate_hindi_question_to_english(
+                            question=q_text,
+                            option_a=str(q.get("option_a", "")),
+                            option_b=str(q.get("option_b", "")),
+                            option_c=str(q.get("option_c", "")),
+                            option_d=str(q.get("option_d", "")),
+                            explanation=str(q.get("explanation", "")),
+                        )
+                        translated["original_question_hindi"] = q_text
+                        db.update_question_fields(qid, translated)
+                        st.success("✅ Translated to English!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Translation failed: {exc}")
 
 
 def show_question_bank() -> None:
@@ -1559,6 +1587,13 @@ def show_question_bank() -> None:
                     help="Smaller chunk sizes (3-5 pages) avoid AI token truncation and allow smooth real-time progress updates.",
                 )
 
+                translate_hindi_choice = st.checkbox(
+                    "🌐 Auto-Translate Hindi Questions to English",
+                    value=True,
+                    help="If questions or options in the mock paper are in Hindi (or bilingual), automatically translates them into clear, academic English suitable for BPSC/UPSC study while preserving the original Hindi text for verification.",
+                    key="pdf_translate_hindi",
+                )
+
             is_cancel_selected = dup_handling_mode.startswith("⛔")
             extract_clicked = st.button(
                 "🚀 Extract, OCR & Sort Mock Questions (Background)",
@@ -1586,6 +1621,7 @@ def show_question_bank() -> None:
                         chunk_size=chunk_batch_size,
                         ocr_strategy=active_ocr_strategy,
                         preferred_local_engine=pref_engine_code,
+                        translate_hindi=translate_hindi_choice,
                     )
                     st.success(f"🚀 Started background OCR extraction for '{uploaded_pdf.name}'! You can safely reload the page or put your computer to sleep.")
                     time.sleep(1)
@@ -1636,6 +1672,9 @@ def show_question_bank() -> None:
                     telemetry_items.append(f"📄 **{dig_pages} page(s)** processed via **Digital Text Extraction**")
                 if vis_pages > 0:
                     telemetry_items.append(f"👁️ **{vis_pages} page(s)** verified via **Gemini Multimodal Vision Fallback** (ensuring zero accuracy loss)")
+                hindi_trans_count = sum(1 for q in ext_questions if q.get("original_language") == "Hindi" or bool(q.get("original_question_hindi")))
+                if hindi_trans_count > 0:
+                    telemetry_items.append(f"🌐 **{hindi_trans_count} question(s)** translated from **Hindi to English**")
 
                 if telemetry_items:
                     st.caption(" • ".join(telemetry_items))

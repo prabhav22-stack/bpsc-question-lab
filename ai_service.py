@@ -392,3 +392,54 @@ Instructions:
             return fallback_resp.text or "", []
         except Exception as exc:
             raise AIServiceError(f"Research synthesis failed: {exc}") from exc
+
+
+def translate_hindi_question_to_english(
+    question: str,
+    option_a: str = "",
+    option_b: str = "",
+    option_c: str = "",
+    option_d: str = "",
+    explanation: str = "",
+) -> Dict[str, str]:
+    """Translate a Hindi question and its options into standard, academic English."""
+    if not is_gemini_configured():
+        raise AIServiceError("Gemini API is not configured.")
+    client = _get_client()
+    model = get_gemini_model()
+
+    prompt = (
+        "You are an expert bilingual examination translator for BPSC and UPSC Civil Services.\n"
+        "Translate the following Hindi multiple-choice question and options into clear, standard, academic English.\n"
+        "Maintain standard official terminology (e.g. translate 'मौलिक अधिकार' as 'Fundamental Rights', "
+        "'राज्यपाल' as 'Governor', 'संसद' as 'Parliament', 'पंचायती राज' as 'Panchayati Raj', 'महाजनपद' as 'Mahajanapada').\n\n"
+        f"Hindi Question: {question}\n"
+        f"Option A: {option_a}\n"
+        f"Option B: {option_b}\n"
+        f"Option C: {option_c}\n"
+        f"Option D: {option_d}\n"
+        f"Explanation: {explanation}\n\n"
+        "Return a JSON object with keys: 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'explanation'."
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+        data = json.loads(response.text)
+        return {
+            "question": data.get("question", question),
+            "option_a": data.get("option_a", option_a),
+            "option_b": data.get("option_b", option_b),
+            "option_c": data.get("option_c", option_c),
+            "option_d": data.get("option_d", option_d),
+            "explanation": data.get("explanation", explanation),
+        }
+    except Exception as exc:
+        raise AIServiceError(f"Failed to translate Hindi question: {exc}") from exc
+

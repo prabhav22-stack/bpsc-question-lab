@@ -43,16 +43,24 @@ except ImportError:
     _HAS_GENAI = False
 
 
-SYSTEM_PDF_MOCK_EXTRACTOR = """You are an expert examination archivist and syllabus classifier for BPSC CCE & UPSC Prelims.
+SYSTEM_PDF_MOCK_EXTRACTOR = """You are an expert examination archivist, bilingual translator, and syllabus classifier for BPSC CCE & UPSC Prelims.
 Your task is to analyze mock test exam paper pages (either formatted digital text, local OCR text, or scanned PDF page images) and extract every multiple-choice question (MCQ).
 
+LANGUAGE & TRANSLATION REQUIREMENT:
+- All extracted questions must be provided in standard, academic English.
+- If a question, options, or explanations are originally written in Hindi (or Devanagari script), or are presented bilingually:
+  1. Accurately translate the question stem, all 4 options, and explanations into fluent, precise, exam-standard English.
+  2. Maintain accurate Civil Services terminology (e.g. translate 'मौलिक अधिकार' as 'Fundamental Rights', 'संसद' as 'Parliament', 'राज्यपाल' as 'Governor', 'महाजनपद' as 'Mahajanapada', 'चंपारण सत्याग्रह' as 'Champaran Satyagraha').
+  3. Set 'original_language' to 'Hindi' (or 'Bilingual') and preserve the original Hindi question in 'original_question_hindi'.
+- If the question is already in English, set 'original_language' to 'English' and leave 'original_question_hindi' empty.
+
 For every question found:
-1. Extract the full question stem.
-2. Extract the text for all 4 options (A, B, C, D). If options in the source are labeled 1, 2, 3, 4 or (a), (b), (c), (d), map them cleanly to A, B, C, D.
+1. Extract the full question stem (in English).
+2. Extract the text for all 4 options (A, B, C, D) in English. If options in the source are labeled 1, 2, 3, 4, (a), (b), (c), (d), or (क), (ख), (ग), (घ), map them cleanly to A, B, C, D.
 3. Identify the correct answer option:
    - If an official answer key, solution table, or marked answer is present in the text, use it.
    - If no answer key is visible in this chunk, accurately determine the correct option using authoritative academic knowledge.
-4. Provide a clear, factual explanation explaining why the correct option is right.
+4. Provide a clear, factual explanation in English explaining why the correct option is right.
 5. Crucially: Classify and sort the question into exactly ONE of the following standard syllabus subjects:
    - "Modern History" (Revolt of 1857, British rule, Freedom movement, INC, Governor Generals)
    - "Ancient & Medieval History" (Indus Valley, Vedic, Mauryan, Gupta, Delhi Sultanate, Mughals)
@@ -64,7 +72,7 @@ For every question found:
    - "Environment" (Ecology, Biodiversity, Wildlife parks, Climate change, Environmental treaties)
    - "Current Affairs" (Recent summits, awards, sports, appointments, government initiatives, indices)
    - "Other" (Reasoning, Aptitude, or unclassified)
-6. Extract a concise topic (e.g. "Fundamental Rights", "Drain of Wealth", "Rivers of Bihar").
+6. Extract a concise topic in English (e.g. "Fundamental Rights", "Drain of Wealth", "Rivers of Bihar").
 7. Estimate difficulty ("Easy", "Medium", "Hard").
 """
 
@@ -114,6 +122,7 @@ def extract_mock_questions_from_pdf(
     chunk_size: int = 4,
     ocr_strategy: str = "auto",
     preferred_local_engine: str = "auto",
+    translate_hindi: bool = True,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     cancel_check_fn: Optional[Callable[[], bool]] = None,
     incremental_callback: Optional[Callable[[float, str, List[Dict[str, Any]], Dict[str, Any]], None]] = None,
@@ -211,6 +220,15 @@ def extract_mock_questions_from_pdf(
                 "Economy, General Science, Environment, Current Affairs, Other.\n"
                 "If no questions are on these pages (e.g. cover page, blank page, instructions), return an empty list."
             )
+            if translate_hindi:
+                prompt_instruction += (
+                    "\n\nHINDI TO ENGLISH TRANSLATION DIRECTIVE:\n"
+                    "If questions, options, or explanations on these pages are in Hindi (Devanagari) or bilingual, "
+                    "you MUST accurately translate the question stem, all options, and explanations into standard, fluent, academic English. "
+                    "Maintain precise Civil Services terminology (e.g. translate 'मौलिक अधिकार' as 'Fundamental Rights', "
+                    "'संसद' as 'Parliament', 'राज्यपाल' as 'Governor', 'चंपारण' as 'Champaran', 'महाजनपद' as 'Mahajanapada'). "
+                    "Set original_language='Hindi' (or 'Bilingual') and put the original Hindi text in original_question_hindi."
+                )
 
             req_config = types.GenerateContentConfig(
                 system_instruction=SYSTEM_PDF_MOCK_EXTRACTOR,
@@ -399,6 +417,7 @@ def start_background_extraction_job(
     chunk_size: int = 4,
     ocr_strategy: str = "auto",
     preferred_local_engine: str = "auto",
+    translate_hindi: bool = True,
 ) -> str:
     """Launch persistent background OCR extraction thread and return unique job_id.
 
@@ -447,6 +466,7 @@ def start_background_extraction_job(
                 chunk_size=chunk_size,
                 ocr_strategy=ocr_strategy,
                 preferred_local_engine=preferred_local_engine,
+                translate_hindi=translate_hindi,
                 progress_callback=lambda pct, msg: db.update_ocr_job_progress(
                     job_id=job_id, progress=pct, progress_msg=msg, processed_pages=0
                 ),
