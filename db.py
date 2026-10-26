@@ -1566,8 +1566,8 @@ except ImportError:
 
 
 def connect_db() -> sqlite3.Connection:
-    """Return a connection with Row factory enabled."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    """Return a connection with Row factory enabled and concurrency timeout."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1720,6 +1720,27 @@ def init_db() -> None:
                 uploaded_at TEXT NOT NULL,
                 questions_count INTEGER NOT NULL DEFAULT 0,
                 file_size_bytes INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        # 8. Background Persistent OCR Jobs
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ocr_jobs (
+                job_id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                mock_title TEXT NOT NULL,
+                target_exam TEXT NOT NULL DEFAULT 'BPSC',
+                status TEXT NOT NULL DEFAULT 'running',
+                progress REAL NOT NULL DEFAULT 0.0,
+                progress_msg TEXT NOT NULL DEFAULT '',
+                total_pages INTEGER NOT NULL DEFAULT 0,
+                processed_pages INTEGER NOT NULL DEFAULT 0,
+                extracted_questions_json TEXT NOT NULL DEFAULT '[]',
+                stats_json TEXT NOT NULL DEFAULT '{}',
+                error_msg TEXT NOT NULL DEFAULT '',
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
         """)
 
@@ -2570,9 +2591,274 @@ def export_sqlite_to_json() -> str:
             "pinned_notebook",
             "research_notes",
             "uploaded_mock_files",
+            "ocr_jobs",
         ]
         export_data = {}
         for t in tables:
             rows = conn.execute(f"SELECT * FROM {t}").fetchall()
             export_data[t] = [dict(r) for r in rows]
         return json.dumps(export_data, indent=2)
+
+
+# -----------------------------------------------------------------------------
+# Background Persistent OCR Job Management
+# -----------------------------------------------------------------------------
+
+def _ensure_ocr_jobs_table(conn: sqlite3.Connection) -> None:
+    """Ensure the ocr_jobs table exists idempotently."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ocr_jobs (
+            job_id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            mock_title TEXT NOT NULL,
+            target_exam TEXT NOT NULL DEFAULT 'BPSC',
+            status TEXT NOT NULL DEFAULT 'running',
+            progress REAL NOT NULL DEFAULT 0.0,
+            progress_msg TEXT NOT NULL DEFAULT '',
+            total_pages INTEGER NOT NULL DEFAULT 0,
+            processed_pages INTEGER NOT NULL DEFAULT 0,
+            extracted_questions_json TEXT NOT NULL DEFAULT '[]',
+            stats_json TEXT NOT NULL DEFAULT '{}',
+            error_msg TEXT NOT NULL DEFAULT '',
+            cancel_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+
+def create_ocr_job(
+    job_id: str,
+    filename: str,
+    mock_title: str,
+    target_exam: str = "BPSC",
+    total_pages: int = 0,
+    conn_factory: Any = None,
+) -> None:
+    """Register a new background OCR job in SQLite."""
+    now = datetime.now().isoformat(timespec="seconds")
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        conn.execute(
+            """
+            INSERT INTO ocr_jobs (
+                job_id, filename, mock_title, target_exam, status,
+                progress, progress_msg, total_pages, processed_pages,
+                extracted_questions_json, stats_json, error_msg,
+                cancel_requested, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'running', 0.0, 'Initializing background OCR...', ?, 0, '[]', '{}', '', 0, ?, ?)
+            """,
+            (job_id, filename, mock_title, target_exam, total_pages, now, now),
+        )
+        conn.commit()
+
+
+def update_ocr_job_progress(
+    job_id: str,
+    progress: float,
+    progress_msg: str,
+    processed_pages: int,
+    extracted_questions: Optional[List[Dict[str, Any]]] = None,
+    stats: Optional[Dict[str, Any]] = None,
+    conn_factory: Any = None,
+) -> None:
+    """Update progress and incremental extracted questions for a running OCR job."""
+    now = datetime.now().isoformat(timespec="seconds")
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        if extracted_questions is not None and stats is not None:
+            conn.execute(
+                """
+                UPDATE ocr_jobs
+                SET progress = ?, progress_msg = ?, processed_pages = ?,
+                    extracted_questions_json = ?, stats_json = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    progress,
+                    progress_msg,
+                    processed_pages,
+                    json.dumps(extracted_questions),
+                    json.dumps(stats),
+                    now,
+                    job_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE ocr_jobs
+                SET progress = ?, progress_msg = ?, processed_pages = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (progress, progress_msg, processed_pages, now, job_id),
+            )
+        conn.commit()
+
+
+def complete_ocr_job(
+    job_id: str,
+    extracted_questions: List[Dict[str, Any]],
+    stats: Dict[str, Any],
+    conn_factory: Any = None,
+) -> None:
+    """Mark an OCR job as completed and persist final parsed question payloads."""
+    now = datetime.now().isoformat(timespec="seconds")
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        conn.execute(
+            """
+            UPDATE ocr_jobs
+            SET status = 'completed', progress = 1.0,
+                progress_msg = 'Extraction and categorization complete.',
+                extracted_questions_json = ?, stats_json = ?, updated_at = ?
+            WHERE job_id = ?
+            """,
+            (json.dumps(extracted_questions), json.dumps(stats), now, job_id),
+        )
+        conn.commit()
+
+
+def fail_ocr_job(
+    job_id: str,
+    error_msg: str,
+    conn_factory: Any = None,
+) -> None:
+    """Mark an OCR job as failed with error details."""
+    now = datetime.now().isoformat(timespec="seconds")
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        conn.execute(
+            """
+            UPDATE ocr_jobs
+            SET status = 'failed', error_msg = ?, updated_at = ?
+            WHERE job_id = ?
+            """,
+            (error_msg, now, job_id),
+        )
+        conn.commit()
+
+
+def request_cancel_ocr_job(
+    job_id: str,
+    conn_factory: Any = None,
+) -> None:
+    """Request graceful cancellation of a running background OCR job."""
+    now = datetime.now().isoformat(timespec="seconds")
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        conn.execute(
+            """
+            UPDATE ocr_jobs
+            SET cancel_requested = 1, status = 'cancelled',
+                progress_msg = 'Extraction cancelled by user.', updated_at = ?
+            WHERE job_id = ?
+            """,
+            (now, job_id),
+        )
+        conn.commit()
+
+
+def is_ocr_job_cancel_requested(
+    job_id: str,
+    conn_factory: Any = None,
+) -> bool:
+    """Check if the user has requested cancellation for this job."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        row = conn.execute(
+            "SELECT cancel_requested, status FROM ocr_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return False
+        return bool(row["cancel_requested"]) or row["status"] == "cancelled"
+
+
+def get_ocr_job(
+    job_id: str,
+    conn_factory: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Retrieve full details of an OCR job, parsing nested JSON structures."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        row = conn.execute(
+            "SELECT * FROM ocr_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["extracted_questions"] = json.loads(d.get("extracted_questions_json") or "[]")
+        except Exception:
+            d["extracted_questions"] = []
+        try:
+            d["stats"] = json.loads(d.get("stats_json") or "{}")
+        except Exception:
+            d["stats"] = {}
+        return d
+
+
+def get_active_ocr_job(conn_factory: Any = None) -> Optional[Dict[str, Any]]:
+    """Retrieve currently running background OCR job if any."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        row = conn.execute(
+            "SELECT * FROM ocr_jobs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["extracted_questions"] = json.loads(d.get("extracted_questions_json") or "[]")
+        except Exception:
+            d["extracted_questions"] = []
+        try:
+            d["stats"] = json.loads(d.get("stats_json") or "{}")
+        except Exception:
+            d["stats"] = {}
+        return d
+
+
+def get_latest_completed_or_active_job(conn_factory: Any = None) -> Optional[Dict[str, Any]]:
+    """Retrieve the most recent active or completed OCR job for state restoration."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        row = conn.execute(
+            "SELECT * FROM ocr_jobs WHERE status IN ('running', 'completed', 'cancelled') ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["extracted_questions"] = json.loads(d.get("extracted_questions_json") or "[]")
+        except Exception:
+            d["extracted_questions"] = []
+        try:
+            d["stats"] = json.loads(d.get("stats_json") or "{}")
+        except Exception:
+            d["stats"] = {}
+        return d
+
+
+def clear_ocr_job(
+    job_id: str,
+    conn_factory: Any = None,
+) -> None:
+    """Delete an OCR job record after it has been reviewed or saved."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_ocr_jobs_table(conn)
+        conn.execute("DELETE FROM ocr_jobs WHERE job_id = ?", (job_id,))
+        conn.commit()
+

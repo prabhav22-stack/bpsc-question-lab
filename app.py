@@ -1189,8 +1189,8 @@ def show_question_bank() -> None:
                     <span style="font-size: 1.1rem;">⚡</span> Multi-Engine Cascaded Local OCR Engine (RapidOCR / PaddleOCR / Pytesseract)
                 </div>
                 <div style="font-size: 0.88rem; color: #cbd5e1; margin-bottom: 8px;">
-                    Processes scanned test papers through high-speed local OCR first to save ~85% API tokens and reduce Gemini load.
-                    If local OCR quality is low or unavailable, it <b>automatically falls back to Gemini Multimodal Vision</b> so <b>zero accuracy is lost</b>.
+                    Processes scanned test papers through parallel local OCR first to save ~85% API tokens and reduce Gemini load.
+                    Runs continuously in the background even if you close the tab or your computer sleeps, with instant cancellation support.
                 </div>
                 <div><b>Active OCR Engines:</b> {' '.join(ocr_badges)}</div>
             </div>
@@ -1198,158 +1198,210 @@ def show_question_bank() -> None:
             unsafe_allow_html=True,
         )
 
-        up_col1, up_col2 = st.columns([3, 2])
+        # Check for active background job or restored completed job
+        active_bg_job = db.get_active_ocr_job()
+        latest_bg_job = db.get_latest_completed_or_active_job()
 
-        dup_handling_mode = "🛡️ Extract only new unique questions (Skip duplicates)"
-        pdf_file_hash = ""
-        is_already_uploaded = False
+        # If a background job just completed and user hasn't previewed it yet, restore it
+        if st.session_state.get("extracted_mock_preview") is None and latest_bg_job and latest_bg_job["status"] == "completed":
+            if st.session_state.get("dismissed_ocr_job_id") != latest_bg_job["job_id"]:
+                job_stats = latest_bg_job.get("stats", {})
+                job_stats["job_id"] = latest_bg_job["job_id"]
+                st.session_state["extracted_mock_preview"] = {
+                    "questions": latest_bg_job.get("extracted_questions", []),
+                    "stats": job_stats,
+                }
 
-        with up_col1:
-            uploaded_pdf = st.file_uploader(
-                "Upload Mock Test PDF (OCR or Scanned)",
-                type=["pdf"],
-                key="mock_pdf_uploader",
-                help="Supports multi-page OCR text PDFs and scanned image PDFs. No practical file size limit (up to 2GB).",
-            )
-            suggested_title = ""
-            if uploaded_pdf is not None:
-                suggested_title = Path(uploaded_pdf.name).stem.replace("_", " ").title()
-                pdf_bytes_check = uploaded_pdf.getvalue()
-                pdf_file_hash = hashlib.sha256(pdf_bytes_check).hexdigest()
-                is_already_uploaded, prev_meta = db.is_pdf_already_uploaded(uploaded_pdf.name, pdf_file_hash)
-
-                if is_already_uploaded and prev_meta:
-                    st.warning(
-                        f"⚠️ **Duplicate File Detected:** `'**{uploaded_pdf.name}**'` has already been uploaded previously!\n\n"
-                        f"- **Recorded Mock Title:** `{prev_meta.get('mock_title', uploaded_pdf.name)}`\n"
-                        f"- **Uploaded On:** {prev_meta.get('uploaded_at', 'Previously')}\n"
-                        f"- **Questions in DB:** {prev_meta.get('questions_count', 0)} question(s)\n\n"
-                        "Select how to handle this file to prevent duplicate questions:"
-                    )
-                    dup_handling_mode = st.radio(
-                        "Duplicate File Handling",
-                        [
-                            "🛡️ Extract only new unique questions (Skip questions already in database)",
-                            "🔄 Re-extract & Replace existing test (Purge older questions from this test and refresh)",
-                            "⛔ Cancel processing (Do not extract to avoid duplicate questions)",
-                        ],
-                        key="pdf_dup_handling_mode",
-                    )
-
-            mock_test_title = st.text_input(
-                "Mock Test Title / Institute Name*",
-                value=suggested_title or "Drishti IAS BPSC Prelims Mock 01",
-                placeholder="e.g. Drishti IAS BPSC Prelims Mock 01",
-                help="This title will be tagged as the source of all extracted questions.",
+        # 1. If a job is currently RUNNING in background: show live progress panel & CANCEL button
+        if active_bg_job is not None:
+            st.markdown(
+                f"""
+                <div style="background: rgba(59, 130, 246, 0.08); border: 2px solid rgba(59, 130, 246, 0.4); border-radius: 10px; padding: 18px 22px; margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="font-size: 1.15rem; font-weight: 700; color: #60a5fa;">
+                            ⚙️ Background PDF OCR in Progress: {active_bg_job['mock_title']}
+                        </div>
+                        <span class="lab-badge" style="background: rgba(59, 130, 246, 0.2); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.4);">
+                            RUNNING IN BACKGROUND
+                        </span>
+                    </div>
+                    <div style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 4px;">
+                        🛡️ <b>Sleep & Reload Resilient:</b> You can safely reload the page, close this tab, or put your computer to sleep.
+                        The extraction runs continuously in the background on the server until finished or cancelled.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-        with up_col2:
-            target_exam_pdf = st.selectbox("Target Exam Syllabus", ["BPSC", "UPSC", "Both"], index=0, key="pdf_target_exam")
-            
-            ocr_strat_selection = st.selectbox(
-                "OCR Processing Pipeline",
-                [
-                    "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)",
-                    "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)",
-                    "💻 Local OCR Only (RapidOCR / Pytesseract)",
-                ],
-                index=0,
-                help="Recommended: Auto Cascaded saves ~85% Gemini API tokens by running local OCR first on scanned images, with automatic fallback to Gemini Vision if scanned quality is degraded.",
-                key="pdf_ocr_pipeline_choice",
-            )
-            strat_code_map = {
-                "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)": "auto",
-                "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)": "vision_only",
-                "💻 Local OCR Only (RapidOCR / Pytesseract)": "local_only",
-            }
-            active_ocr_strategy = strat_code_map.get(ocr_strat_selection, "auto")
+            # Live progress bar and page metrics
+            curr_progress = max(0.02, min(1.0, float(active_bg_job.get("progress", 0.05))))
+            st.progress(curr_progress)
 
-            pref_engine_code = "auto"
-            if active_ocr_strategy != "vision_only":
-                pref_engine_label = st.selectbox(
-                    "Preferred Local Engine",
+            p_col1, p_col2 = st.columns([3, 1])
+            p_col1.write(f"⏳ **Status:** {active_bg_job.get('progress_msg', 'Processing mock pages...')}")
+
+            if p_col2.button("⏹️ Cancel Extraction", type="secondary", use_container_width=True, key="btn_cancel_running_ocr"):
+                db.request_cancel_ocr_job(active_bg_job["job_id"])
+                st.warning("Cancellation requested. Halting background extraction...")
+                time.sleep(1)
+                st.rerun()
+
+            # Auto-poll while extraction is running
+            time.sleep(2)
+            st.rerun()
+
+        # 2. If the previous job was CANCELLED by user: show notification and dismiss action
+        elif latest_bg_job and latest_bg_job["status"] == "cancelled" and st.session_state.get("dismissed_ocr_job_id") != latest_bg_job["job_id"]:
+            st.warning(f"⚠️ Extraction of **'{latest_bg_job['mock_title']}'** was cancelled by user. Partial questions were discarded.")
+            if st.button("Dismiss & Start New PDF Upload", key="btn_dismiss_cancelled_job"):
+                db.clear_ocr_job(latest_bg_job["job_id"])
+                st.session_state["dismissed_ocr_job_id"] = latest_bg_job["job_id"]
+                st.rerun()
+
+        # 3. If the previous job FAILED: show error and dismiss action
+        elif latest_bg_job and latest_bg_job["status"] == "failed" and st.session_state.get("dismissed_ocr_job_id") != latest_bg_job["job_id"]:
+            st.error(f"❌ Extraction error on **'{latest_bg_job['mock_title']}'**: {latest_bg_job.get('error_msg', 'Unknown error')}")
+            if st.button("Dismiss & Try Again", key="btn_dismiss_failed_job"):
+                db.clear_ocr_job(latest_bg_job["job_id"])
+                st.session_state["dismissed_ocr_job_id"] = latest_bg_job["job_id"]
+                st.rerun()
+
+        # 4. Normal PDF Upload Form (shown when no job is currently processing)
+        if active_bg_job is None:
+            up_col1, up_col2 = st.columns([3, 2])
+
+            dup_handling_mode = "🛡️ Extract only new unique questions (Skip duplicates)"
+            pdf_file_hash = ""
+            is_already_uploaded = False
+
+            with up_col1:
+                uploaded_pdf = st.file_uploader(
+                    "Upload Mock Test PDF (OCR or Scanned)",
+                    type=["pdf"],
+                    key="mock_pdf_uploader",
+                    help="Supports multi-page OCR text PDFs and scanned image PDFs. No practical file size limit (up to 2GB).",
+                )
+                suggested_title = ""
+                if uploaded_pdf is not None:
+                    suggested_title = Path(uploaded_pdf.name).stem.replace("_", " ").title()
+                    pdf_bytes_check = uploaded_pdf.getvalue()
+                    pdf_file_hash = hashlib.sha256(pdf_bytes_check).hexdigest()
+                    is_already_uploaded, prev_meta = db.is_pdf_already_uploaded(uploaded_pdf.name, pdf_file_hash)
+
+                    if is_already_uploaded and prev_meta:
+                        st.warning(
+                            f"⚠️ **Duplicate File Detected:** `'**{uploaded_pdf.name}**'` has already been uploaded previously!\n\n"
+                            f"- **Recorded Mock Title:** `{prev_meta.get('mock_title', uploaded_pdf.name)}`\n"
+                            f"- **Uploaded On:** {prev_meta.get('uploaded_at', 'Previously')}\n"
+                            f"- **Questions in DB:** {prev_meta.get('questions_count', 0)} question(s)\n\n"
+                            "Select how to handle this file to prevent duplicate questions:"
+                        )
+                        dup_handling_mode = st.radio(
+                            "Duplicate File Handling",
+                            [
+                                "🛡️ Extract only new unique questions (Skip questions already in database)",
+                                "🔄 Re-extract & Replace existing test (Purge older questions from this test and refresh)",
+                                "⛔ Cancel processing (Do not extract to avoid duplicate questions)",
+                            ],
+                            key="pdf_dup_handling_mode",
+                        )
+
+                mock_test_title = st.text_input(
+                    "Mock Test Title / Institute Name*",
+                    value=suggested_title or "Drishti IAS BPSC Prelims Mock 01",
+                    placeholder="e.g. Drishti IAS BPSC Prelims Mock 01",
+                    help="This title will be tagged as the source of all extracted questions.",
+                )
+
+            with up_col2:
+                target_exam_pdf = st.selectbox("Target Exam Syllabus", ["BPSC", "UPSC", "Both"], index=0, key="pdf_target_exam")
+                
+                ocr_strat_selection = st.selectbox(
+                    "OCR Processing Pipeline",
                     [
-                        "Auto Priority (RapidOCR → PaddleOCR → Pytesseract)",
-                        "RapidOCR (Fastest ONNX CPU)",
-                        "PaddleOCR (Deep Learning)",
-                        "Pytesseract (Google Tesseract)",
+                        "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)",
+                        "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)",
+                        "💻 Local OCR Only (RapidOCR / Pytesseract)",
                     ],
                     index=0,
-                    key="pdf_pref_local_engine",
+                    help="Recommended: Auto Cascaded saves ~85% Gemini API tokens by running local OCR first on scanned images, with automatic fallback to Gemini Vision if scanned quality is degraded.",
+                    key="pdf_ocr_pipeline_choice",
                 )
-                pref_code_map = {
-                    "Auto Priority (RapidOCR → PaddleOCR → Pytesseract)": "auto",
-                    "RapidOCR (Fastest ONNX CPU)": "rapidocr",
-                    "PaddleOCR (Deep Learning)": "paddleocr",
-                    "Pytesseract (Google Tesseract)": "pytesseract",
+                strat_code_map = {
+                    "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)": "auto",
+                    "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)": "vision_only",
+                    "💻 Local OCR Only (RapidOCR / Pytesseract)": "local_only",
                 }
-                pref_engine_code = pref_code_map.get(pref_engine_label, "auto")
+                active_ocr_strategy = strat_code_map.get(ocr_strat_selection, "auto")
 
-            page_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pdf_scope")
-            p_start, p_end = None, None
-            if page_scope == "Custom Page Range":
-                pr_c1, pr_c2 = st.columns(2)
-                p_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pdf_p_start")
-                p_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pdf_p_end")
+                pref_engine_code = "auto"
+                if active_ocr_strategy != "vision_only":
+                    pref_engine_label = st.selectbox(
+                        "Preferred Local Engine",
+                        [
+                            "Auto Priority (RapidOCR → PaddleOCR → Pytesseract)",
+                            "RapidOCR (Fastest ONNX CPU)",
+                            "PaddleOCR (Deep Learning)",
+                            "Pytesseract (Google Tesseract)",
+                        ],
+                        index=0,
+                        key="pdf_pref_local_engine",
+                    )
+                    pref_code_map = {
+                        "Auto Priority (RapidOCR → PaddleOCR → Pytesseract)": "auto",
+                        "RapidOCR (Fastest ONNX CPU)": "rapidocr",
+                        "PaddleOCR (Deep Learning)": "paddleocr",
+                        "Pytesseract (Google Tesseract)": "pytesseract",
+                    }
+                    pref_engine_code = pref_code_map.get(pref_engine_label, "auto")
 
-            chunk_batch_size = st.slider(
-                "Batch Size (Pages per AI Chunk)",
-                min_value=2,
-                max_value=6,
-                value=4,
-                help="Smaller chunk sizes (3-5 pages) avoid AI token truncation and allow smooth real-time progress updates.",
+                page_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pdf_scope")
+                p_start, p_end = None, None
+                if page_scope == "Custom Page Range":
+                    pr_c1, pr_c2 = st.columns(2)
+                    p_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pdf_p_start")
+                    p_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pdf_p_end")
+
+                chunk_batch_size = st.slider(
+                    "Batch Size (Pages per AI Chunk)",
+                    min_value=2,
+                    max_value=6,
+                    value=4,
+                    help="Smaller chunk sizes (3-5 pages) avoid AI token truncation and allow smooth real-time progress updates.",
+                )
+
+            is_cancel_selected = dup_handling_mode.startswith("⛔")
+            extract_clicked = st.button(
+                "🚀 Extract, OCR & Sort Mock Questions (Background)",
+                type="primary",
+                use_container_width=True,
+                disabled=(uploaded_pdf is None or is_cancel_selected),
+                key="btn_run_pdf_extraction",
             )
 
-        is_cancel_selected = dup_handling_mode.startswith("⛔")
-        extract_clicked = st.button(
-            "🚀 Extract, OCR & Sort Mock Questions",
-            type="primary",
-            use_container_width=True,
-            disabled=(uploaded_pdf is None or is_cancel_selected),
-            key="btn_run_pdf_extraction",
-        )
+            if is_cancel_selected and uploaded_pdf is not None:
+                st.info("ℹ️ Processing cancelled to prevent duplicate questions. To proceed, select 'Skip questions already in database' or choose another PDF.")
 
-        if is_cancel_selected and uploaded_pdf is not None:
-            st.info("ℹ️ Processing cancelled to prevent duplicate questions. To proceed, select 'Skip questions already in database' or choose another PDF.")
-
-        if extract_clicked and uploaded_pdf is not None and not is_cancel_selected:
-            if not config.is_gemini_configured():
-                st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & subject classification.")
-            else:
-                prog_bar = st.progress(0.0)
-                status_txt = st.empty()
-
-                def _progress_cb(pct: float, msg: str) -> None:
-                    prog_bar.progress(min(1.0, max(0.0, pct)))
-                    status_txt.info(f"⏳ {msg}")
-
-                try:
-                    with st.spinner("Analyzing PDF pages and running multi-engine question extraction with deduplication..."):
-                        pdf_bytes = uploaded_pdf.getvalue()
-                        extracted_qs, stats = pdf_extractor.extract_mock_questions_from_pdf(
-                            pdf_bytes=pdf_bytes,
-                            mock_title=mock_test_title.strip() or "Uploaded Mock Test",
-                            target_exam=target_exam_pdf,
-                            page_start=p_start,
-                            page_end=p_end,
-                            chunk_size=chunk_batch_size,
-                            ocr_strategy=active_ocr_strategy,
-                            preferred_local_engine=pref_engine_code,
-                            progress_callback=_progress_cb,
-                        )
-                        stats["filename"] = uploaded_pdf.name
-                        stats["file_bytes_len"] = len(pdf_bytes)
-
-                    prog_bar.progress(1.0)
-                    status_txt.success(f"✅ Extraction completed! Parsed {len(extracted_qs)} question(s).")
-                    st.session_state["extracted_mock_preview"] = {
-                        "questions": extracted_qs,
-                        "stats": stats,
-                    }
+            if extract_clicked and uploaded_pdf is not None and not is_cancel_selected:
+                if not config.is_gemini_configured():
+                    st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & subject classification.")
+                else:
+                    pdf_bytes = uploaded_pdf.getvalue()
+                    new_job_id = pdf_extractor.start_background_extraction_job(
+                        pdf_bytes=pdf_bytes,
+                        filename=uploaded_pdf.name,
+                        mock_title=mock_test_title.strip() or "Uploaded Mock Test",
+                        target_exam=target_exam_pdf,
+                        page_start=p_start,
+                        page_end=p_end,
+                        chunk_size=chunk_batch_size,
+                        ocr_strategy=active_ocr_strategy,
+                        preferred_local_engine=pref_engine_code,
+                    )
+                    st.success(f"🚀 Started background OCR extraction for '{uploaded_pdf.name}'! You can safely reload the page or put your computer to sleep.")
+                    time.sleep(1)
                     st.rerun()
-
-                except Exception as exc:
-                    status_txt.error(f"❌ PDF Extraction error: {exc}")
 
         # Render Extracted Preview & Database Save Action with Deduplication
         if st.session_state.get("extracted_mock_preview") is not None:
@@ -1456,13 +1508,16 @@ def show_question_bank() -> None:
                         file_size_bytes=fbytes_len,
                     )
 
+                    # Clear background job from database if tracked
+                    if ext_stats.get("job_id"):
+                        db.clear_ocr_job(ext_stats["job_id"])
                     st.session_state["extracted_mock_preview"] = None
                     st.success(f"✨ Successfully added **{saved_count}** unique mock questions! (Prevented {len(duplicate_qs)} duplicates from repeating).")
                     st.rerun()
 
                 if sv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_prev"):
-                    st.session_state["extracted_mock_preview"] = None
-                    st.rerun()
+                    if ext_stats.get("job_id"):
+                        db.clear_ocr_job(ext_stats["job_id"])
                     st.session_state["extracted_mock_preview"] = None
                     st.rerun()
 

@@ -877,6 +877,102 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
             self.assertEqual(stats2["local_ocr_pages"], 0)
             self.assertEqual(stats2["vision_fallback_pages"], 2)
 
+    def test_optimize_image_for_fast_ocr(self):
+        """Verify that oversized scans (>1600px) are downscaled and converted to grayscale for fast OCR."""
+        from PIL import Image
+        import ocr_engine
+
+        # Create a large 3000x2000 RGB test image
+        large_img = Image.new("RGB", (3000, 2000), color=(255, 255, 255))
+        opt_img = ocr_engine.optimize_image_for_fast_ocr(large_img, max_dim=1600)
+
+        # Max dimension must now be <= 1600
+        self.assertLessEqual(max(opt_img.size), 1600)
+        self.assertEqual(opt_img.size[0], 1600)
+        self.assertEqual(opt_img.size[1], int(2000 * (1600 / 3000)))
+        # Must be single-channel grayscale ("L")
+        self.assertEqual(opt_img.mode, "L")
+
+    def test_ocr_jobs_db_lifecycle_and_cancellation(self):
+        """Verify the SQLite ocr_jobs lifecycle: create, update progress, cancel request, query active, and clear."""
+        # Use our in-memory test connection
+        conn_factory = lambda: self.conn
+
+        job_id = "test_job_101"
+        db.create_ocr_job(
+            job_id=job_id,
+            filename="mock_01.pdf",
+            mock_title="Drishti BPSC 01",
+            target_exam="BPSC",
+            total_pages=20,
+            conn_factory=conn_factory,
+        )
+
+        # Must report as active job
+        active = db.get_active_ocr_job(conn_factory=conn_factory)
+        self.assertIsNotNone(active)
+        self.assertEqual(active["job_id"], job_id)
+        self.assertEqual(active["status"], "running")
+        self.assertFalse(db.is_ocr_job_cancel_requested(job_id, conn_factory=conn_factory))
+
+        # Update progress
+        db.update_ocr_job_progress(
+            job_id=job_id,
+            progress=0.50,
+            progress_msg="Processing page 10 (50%)...",
+            processed_pages=10,
+            conn_factory=conn_factory,
+        )
+        job = db.get_ocr_job(job_id, conn_factory=conn_factory)
+        self.assertAlmostEqual(job["progress"], 0.50)
+        self.assertEqual(job["processed_pages"], 10)
+
+        # Request cancellation
+        db.request_cancel_ocr_job(job_id, conn_factory=conn_factory)
+        self.assertTrue(db.is_ocr_job_cancel_requested(job_id, conn_factory=conn_factory))
+        job_cancelled = db.get_ocr_job(job_id, conn_factory=conn_factory)
+        self.assertEqual(job_cancelled["status"], "cancelled")
+
+        # Clear job
+        db.clear_ocr_job(job_id, conn_factory=conn_factory)
+        self.assertIsNone(db.get_ocr_job(job_id, conn_factory=conn_factory))
+
+    def test_background_job_cancellation_abort(self):
+        """Verify that a background extraction job stops immediately when cancel is requested."""
+        import io
+        import time
+        from unittest.mock import MagicMock, patch
+        import pypdf
+        import pdf_extractor
+
+        # Create a 4-page blank PDF
+        w = pypdf.PdfWriter()
+        for _ in range(4):
+            w.add_blank_page(width=200, height=200)
+        buf = io.BytesIO()
+        w.write(buf)
+        pdf_bytes = buf.getvalue()
+
+        # Start job
+        job_id = pdf_extractor.start_background_extraction_job(
+            pdf_bytes=pdf_bytes,
+            filename="cancel_test.pdf",
+            mock_title="Cancel Test Mock",
+            chunk_size=1,
+        )
+
+        # Request cancel immediately
+        db.request_cancel_ocr_job(job_id)
+        self.assertTrue(db.is_ocr_job_cancel_requested(job_id))
+
+        # Wait briefly for thread to terminate
+        time.sleep(0.5)
+        job = db.get_ocr_job(job_id)
+        self.assertEqual(job["status"], "cancelled")
+        # Cleanup
+        db.clear_ocr_job(job_id)
+
+
 
 if __name__ == "__main__":
     unittest.main()
