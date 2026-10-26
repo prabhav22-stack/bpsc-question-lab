@@ -743,6 +743,140 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
         is_up3, _ = db.is_pdf_already_uploaded("drishti_mock_01.pdf", "hash123")
         self.assertFalse(is_up3)
 
+    def test_ocr_engine_probes_and_listing(self):
+        """Verify that get_available_ocr_engines correctly enumerates RapidOCR, PaddleOCR, Pytesseract, and Gemini."""
+        import ocr_engine
+
+        engines = ocr_engine.get_available_ocr_engines()
+        self.assertIsInstance(engines, list)
+        self.assertGreaterEqual(len(engines), 4)
+
+        keys = [e["key"] for e in engines]
+        self.assertIn("rapidocr", keys)
+        self.assertIn("paddleocr", keys)
+        self.assertIn("pytesseract", keys)
+        self.assertIn("gemini_vision", keys)
+
+        # Gemini Vision cloud fallback must always report available=True
+        gemini_eng = next(e for e in engines if e["key"] == "gemini_vision")
+        self.assertTrue(gemini_eng["available"])
+
+    def test_ocr_quality_evaluator(self):
+        """Verify that evaluate_ocr_quality distinguishes real MCQs from degraded scans/noise."""
+        import ocr_engine
+
+        # Empty or very short
+        self.assertFalse(ocr_engine.evaluate_ocr_quality(""))
+        self.assertFalse(ocr_engine.evaluate_ocr_quality("Short text"))
+
+        # Random non-MCQ noise
+        noise = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore."
+        self.assertFalse(ocr_engine.evaluate_ocr_quality(noise))
+
+        # Authentic MCQ text with options
+        mcq_text = (
+            "1. Who among the following led the Revolt of 1857 in Jagdishpur, Bihar?\n"
+            "(A) Amar Singh\n"
+            "(B) Kunwar Singh\n"
+            "(C) Hare Krishna Singh\n"
+            "(D) Pir Ali\n"
+            "Correct Answer: (B)\n"
+            "Explanation: Veer Kunwar Singh led the rebellion in Bihar."
+        )
+        self.assertTrue(ocr_engine.evaluate_ocr_quality(mcq_text))
+
+        # Bilingual / format variation with question words and options
+        bilingual_mcq = (
+            "Which article of the Indian Constitution deals with the Election Commission of India?\n"
+            "a. Article 324\n"
+            "b. Article 280\n"
+            "c. Article 356\n"
+            "d. Article 370\n"
+            "Consider the following statements and select the correct option."
+        )
+        self.assertTrue(ocr_engine.evaluate_ocr_quality(bilingual_mcq))
+
+    def test_local_ocr_cascade_execution_and_fallback(self):
+        """Verify cascaded local OCR: uses text mode when quality is good, falls back to Vision when quality is low."""
+        import io
+        from unittest.mock import MagicMock, patch
+        import pypdf
+        import pdf_extractor
+
+        # Create a sample 2-page blank PDF
+        w = pypdf.PdfWriter()
+        w.add_blank_page(width=200, height=200)
+        w.add_blank_page(width=200, height=200)
+        buf = io.BytesIO()
+        w.write(buf)
+        pdf_bytes = buf.getvalue()
+
+        # Mock Gemini response
+        mock_response = MagicMock()
+        mock_response.text = json.dumps({
+            "questions": [
+                {
+                    "question": "Which river is known as the Sorrow of Bihar?",
+                    "option_a": "Ganga",
+                    "option_b": "Kosi",
+                    "option_c": "Son",
+                    "option_d": "Gandak",
+                    "correct_option": "B",
+                    "explanation": "Kosi causes frequent flooding in North Bihar.",
+                    "subject": "Bihar Special",
+                    "topic": "Rivers",
+                    "difficulty": "Easy",
+                    "question_type": "Static",
+                }
+            ]
+        })
+
+        # Case 1: Local OCR succeeds with high quality text
+        high_quality_ocr = (
+            "1. Which river is known as the Sorrow of Bihar?\n"
+            "(a) Ganga\n(b) Kosi\n(c) Son\n(d) Gandak\n"
+            "Explanation: Kosi causes seasonal floods in Bihar."
+        )
+        with patch("config.is_gemini_configured", return_value=True), \
+             patch("ai_service._get_client") as mock_get_client, \
+             patch("ocr_engine.ocr_page", return_value=(high_quality_ocr, "RapidOCR (ONNX)", 0.92)):
+
+            mock_client = MagicMock()
+            mock_client.models.generate_content.return_value = mock_response
+            mock_get_client.return_value = mock_client
+
+            qs, stats = pdf_extractor.extract_mock_questions_from_pdf(
+                pdf_bytes=pdf_bytes,
+                mock_title="Test Cascade Mock",
+                ocr_strategy="auto",
+            )
+
+            self.assertEqual(len(qs), 1)
+            self.assertEqual(stats["local_ocr_pages"], 2)
+            self.assertEqual(stats["vision_fallback_pages"], 0)
+            self.assertGreater(stats["tokens_saved_estimate"], 0)
+            self.assertIn("RapidOCR (ONNX)", stats["local_engines_used"])
+
+        # Case 2: Local OCR yields degraded/empty text -> Automatic fallback to Gemini Multimodal Vision!
+        with patch("config.is_gemini_configured", return_value=True), \
+             patch("ai_service._get_client") as mock_get_client, \
+             patch("ocr_engine.ocr_page", return_value=("", "None", 0.0)):
+
+            mock_client = MagicMock()
+            mock_client.models.generate_content.return_value = mock_response
+            mock_get_client.return_value = mock_client
+
+            qs2, stats2 = pdf_extractor.extract_mock_questions_from_pdf(
+                pdf_bytes=pdf_bytes,
+                mock_title="Test Fallback Mock",
+                ocr_strategy="auto",
+            )
+
+            self.assertEqual(len(qs2), 1)
+            # Must fall back to Gemini Multimodal Vision to guarantee zero lost questions
+            self.assertEqual(stats2["local_ocr_pages"], 0)
+            self.assertEqual(stats2["vision_fallback_pages"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
