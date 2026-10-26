@@ -1537,23 +1537,25 @@ def show_question_bank() -> None:
                 ocr_strat_selection = st.selectbox(
                     "OCR Processing Pipeline",
                     [
+                        "🚀 Gemini Native File API (Ultra-Fast Cloud Ingestion - Recommended)",
                         "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)",
                         "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)",
                         "💻 Local OCR Only (RapidOCR / Pytesseract)",
                     ],
                     index=0,
-                    help="Recommended: Auto Cascaded saves ~85% Gemini API tokens by running local OCR first on scanned images, with automatic fallback to Gemini Vision if scanned quality is degraded.",
+                    help="Gemini Native File API uploads whole PDF chunks directly to Google Tensor Cloud, extracting & translating 50+ questions in ~20-30 seconds with 0 local CPU load.",
                     key="pdf_ocr_pipeline_choice",
                 )
                 strat_code_map = {
+                    "🚀 Gemini Native File API (Ultra-Fast Cloud Ingestion - Recommended)": "gemini_file",
                     "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)": "auto",
                     "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)": "vision_only",
                     "💻 Local OCR Only (RapidOCR / Pytesseract)": "local_only",
                 }
-                active_ocr_strategy = strat_code_map.get(ocr_strat_selection, "auto")
+                active_ocr_strategy = strat_code_map.get(ocr_strat_selection, "gemini_file")
 
                 pref_engine_code = "auto"
-                if active_ocr_strategy != "vision_only":
+                if active_ocr_strategy not in ["vision_only", "gemini_file"]:
                     pref_engine_label = st.selectbox(
                         "Preferred Local Engine",
                         [
@@ -1583,9 +1585,9 @@ def show_question_bank() -> None:
                 chunk_batch_size = st.slider(
                     "Batch Size (Pages per AI Chunk)",
                     min_value=2,
-                    max_value=6,
-                    value=4,
-                    help="Smaller chunk sizes (3-5 pages) avoid AI token truncation and allow smooth real-time progress updates.",
+                    max_value=12,
+                    value=8 if active_ocr_strategy == "gemini_file" else 4,
+                    help="Pages processed per AI request. For Gemini Native File API, 6-12 pages allows fastest processing (~20 seconds for full papers). For local OCR, 3-5 pages is recommended.",
                 )
 
                 translate_hindi_choice = st.checkbox(
@@ -1656,17 +1658,22 @@ def show_question_bank() -> None:
                 k1.metric("Total Questions Parsed", len(ext_questions))
                 k2.metric("✨ New Unique Questions", len(unique_qs), help="Questions not currently in your Question Bank")
                 k3.metric("🛡️ Duplicates Filtered", len(duplicate_qs), help="Questions already present in your database or repeated in this document")
-                k4.metric("Pipeline Mode", ext_stats.get("ocr_strategy", "auto").title())
+                p_strat = ext_stats.get("ocr_strategy", "auto")
+                p_label = "Native File API" if p_strat == "gemini_file" else p_strat.replace("_", " ").title()
+                k4.metric("Pipeline Mode", p_label)
                 t_saved = ext_stats.get("tokens_saved_estimate", 0)
-                k5.metric("⚡ Est. Tokens Saved", f"~{t_saved:,}" if t_saved > 0 else "N/A", help="Estimated API input tokens saved by running local OCR / text extraction instead of multimodal image encoding")
+                k5.metric("⚡ Est. Tokens Saved", f"~{t_saved:,}" if t_saved > 0 else "N/A", help="Estimated API input tokens saved by running native file streaming or local OCR instead of raw multimodal image payloads")
 
                 # Telemetry breakdown of cascade execution
+                gfile_pages = ext_stats.get("gemini_file_pages", 0)
                 loc_pages = ext_stats.get("local_ocr_pages", 0)
                 vis_pages = ext_stats.get("vision_fallback_pages", 0)
                 dig_pages = ext_stats.get("digital_text_pages", 0)
                 engs_used = ext_stats.get("local_engines_used", [])
 
                 telemetry_items = []
+                if gfile_pages > 0:
+                    telemetry_items.append(f"🚀 **{gfile_pages} page(s)** processed via **Gemini Native File API** (Ultra-Fast Direct Cloud Streaming)")
                 if loc_pages > 0:
                     telemetry_items.append(f"⚡ **{loc_pages} page(s)** processed via **Local OCR** ({', '.join(engs_used) if engs_used else 'RapidOCR / Pytesseract'})")
                 if dig_pages > 0:

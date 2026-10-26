@@ -20,7 +20,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -184,6 +186,7 @@ def extract_mock_questions_from_pdf(
     internal_duplicates = 0
 
     # Tracking telemetry for local OCR vs Gemini Vision
+    gemini_file_pages_count = 0
     local_ocr_pages_count = 0
     vision_fallback_pages_count = 0
     digital_text_pages_count = 0
@@ -237,69 +240,119 @@ def extract_mock_questions_from_pdf(
                 temperature=0.2,
             )
 
-            # Step 1: Check if chunk contains digital text
-            chunk_digital_texts: List[str] = []
-            for p_num in range(c_start, c_end):
-                t = reader.pages[p_num].extract_text() or ""
-                if t.strip():
-                    chunk_digital_texts.append(f"--- Page {p_num + 1} ---\n{t.strip()}")
-            combined_digital = "\n\n".join(chunk_digital_texts)
-
-            if len(combined_digital.strip()) >= 60 and ocr_strategy != "vision_only":
-                # Digital text available and high quality: Direct fast text mode
-                contents_payload: List[Any] = [
-                    f"{prompt_instruction}\n\nPAGE CONTENT (Digital PDF Text):\n{combined_digital}"
-                ]
-                digital_text_pages_count += chunk_page_count
-
-            elif ocr_strategy == "vision_only":
-                # User specifically requested direct Gemini Vision
+            uploaded_file = None
+            if ocr_strategy == "gemini_file":
+                # 🚀 Gemini Native File API: Upload chunk PDF directly to Google Tensor Cloud
                 sub_bytes = slice_pdf_chunk(reader, c_start, c_end)
-                pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
-                contents_payload = [pdf_part, prompt_instruction]
-                vision_fallback_pages_count += chunk_page_count
+                temp_pdf = None
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(sub_bytes)
+                        temp_pdf = tmp.name
+
+                    if hasattr(client, "files") and hasattr(client.files, "upload"):
+                        uploaded_file = client.files.upload(
+                            file=temp_pdf,
+                            config=types.UploadFileConfig(
+                                mime_type="application/pdf",
+                                display_name=f"{mock_title[:25]}_p{c_start+1}-{c_end}.pdf",
+                            ),
+                        )
+                        # Poll briefly if state is PROCESSING
+                        if hasattr(uploaded_file, "state"):
+                            poll_attempts = 0
+                            while str(getattr(uploaded_file.state, "name", uploaded_file.state)).upper() == "PROCESSING" and poll_attempts < 10:
+                                time.sleep(1)
+                                poll_attempts += 1
+                                if hasattr(client.files, "get"):
+                                    uploaded_file = client.files.get(name=uploaded_file.name)
+                        contents_payload = [uploaded_file, prompt_instruction]
+                    else:
+                        pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
+                        contents_payload = [pdf_part, prompt_instruction]
+                except Exception:
+                    pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
+                    contents_payload = [pdf_part, prompt_instruction]
+                finally:
+                    if temp_pdf and os.path.exists(temp_pdf):
+                        try:
+                            os.remove(temp_pdf)
+                        except Exception:
+                            pass
+                gemini_file_pages_count += chunk_page_count
 
             else:
-                # Scanned or image-based pages: Multi-Engine Local OCR Cascade with Parallel Execution
-                pages_in_chunk = [reader.pages[p] for p in range(c_start, c_end)]
-                parallel_results = ocr_engine.ocr_pages_parallel(
-                    pages_in_chunk, preferred_engine=preferred_local_engine
-                )
+                # Check if chunk contains digital text (for auto and local strategies)
+                chunk_digital_texts: List[str] = []
+                for p_num in range(c_start, c_end):
+                    t = reader.pages[p_num].extract_text() or ""
+                    if t.strip():
+                        chunk_digital_texts.append(f"--- Page {p_num + 1} ---\n{t.strip()}")
+                combined_digital = "\n\n".join(chunk_digital_texts)
 
-                local_chunk_texts: List[str] = []
-                for p_offset, (page_txt, eng_name, conf) in enumerate(parallel_results):
-                    p_num = c_start + p_offset
-                    if page_txt.strip():
-                        local_chunk_texts.append(f"--- Page {p_num + 1} ({eng_name}) ---\n{page_txt.strip()}")
-                        if eng_name != "None":
-                            local_engines_used.add(eng_name)
-
-                combined_local_ocr = "\n\n".join(local_chunk_texts)
-                ocr_quality_pass = ocr_engine.evaluate_ocr_quality(combined_local_ocr)
-
-                if ocr_quality_pass or (ocr_strategy == "local_only" and len(combined_local_ocr.strip()) >= 20):
-                    # Local OCR succeeded with high confidence! Fast text mode saves ~85% API tokens
-                    eng_str = ", ".join(sorted(local_engines_used)) if local_engines_used else "Local OCR"
+                if len(combined_digital.strip()) >= 60 and ocr_strategy != "vision_only":
+                    # Digital text available and high quality: Direct fast text mode
                     contents_payload = [
-                        f"{prompt_instruction}\n\nPAGE CONTENT (Extracted via Local {eng_str}):\n{combined_local_ocr}"
+                        f"{prompt_instruction}\n\nPAGE CONTENT (Digital PDF Text):\n{combined_digital}"
                     ]
-                    local_ocr_pages_count += chunk_page_count
-                else:
-                    # Seamless Fallback to Gemini Multimodal Vision to guarantee ZERO loss of accuracy!
+                    digital_text_pages_count += chunk_page_count
+
+                elif ocr_strategy == "vision_only":
+                    # User specifically requested direct Gemini Vision
                     sub_bytes = slice_pdf_chunk(reader, c_start, c_end)
                     pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
                     contents_payload = [pdf_part, prompt_instruction]
                     vision_fallback_pages_count += chunk_page_count
 
-            # Check cancellation again before sending API call
-            if cancel_check_fn and cancel_check_fn():
-                break
+                else:
+                    # Scanned or image-based pages: Multi-Engine Local OCR Cascade with Parallel Execution
+                    pages_in_chunk = [reader.pages[p] for p in range(c_start, c_end)]
+                    parallel_results = ocr_engine.ocr_pages_parallel(
+                        pages_in_chunk, preferred_engine=preferred_local_engine
+                    )
 
-            response = client.models.generate_content(
-                model=model,
-                contents=contents_payload,
-                config=req_config,
-            )
+                    local_chunk_texts: List[str] = []
+                    for p_offset, (page_txt, eng_name, conf) in enumerate(parallel_results):
+                        p_num = c_start + p_offset
+                        if page_txt.strip():
+                            local_chunk_texts.append(f"--- Page {p_num + 1} ({eng_name}) ---\n{page_txt.strip()}")
+                            if eng_name != "None":
+                                local_engines_used.add(eng_name)
+
+                    combined_local_ocr = "\n\n".join(local_chunk_texts)
+                    ocr_quality_pass = ocr_engine.evaluate_ocr_quality(combined_local_ocr)
+
+                    if ocr_quality_pass or (ocr_strategy == "local_only" and len(combined_local_ocr.strip()) >= 20):
+                        # Local OCR succeeded with high confidence! Fast text mode saves ~85% API tokens
+                        eng_str = ", ".join(sorted(local_engines_used)) if local_engines_used else "Local OCR"
+                        contents_payload = [
+                            f"{prompt_instruction}\n\nPAGE CONTENT (Extracted via Local {eng_str}):\n{combined_local_ocr}"
+                        ]
+                        local_ocr_pages_count += chunk_page_count
+                    else:
+                        # Seamless Fallback to Gemini Multimodal Vision to guarantee ZERO loss of accuracy!
+                        sub_bytes = slice_pdf_chunk(reader, c_start, c_end)
+                        pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
+                        contents_payload = [pdf_part, prompt_instruction]
+                        vision_fallback_pages_count += chunk_page_count
+
+            try:
+                # Check cancellation again before sending API call
+                if cancel_check_fn and cancel_check_fn():
+                    break
+
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents_payload,
+                    config=req_config,
+                )
+            finally:
+                if uploaded_file is not None:
+                    try:
+                        if hasattr(client, "files") and hasattr(client.files, "delete"):
+                            client.files.delete(name=uploaded_file.name)
+                    except Exception:
+                        pass
 
             if response.text:
                 parsed_json = json.loads(response.text)
@@ -351,7 +404,11 @@ def extract_mock_questions_from_pdf(
 
         # Trigger incremental callback so database and frontend have fresh progress & questions
         if incremental_callback:
-            tokens_saved_intermediate = int(local_ocr_pages_count * 1100 + digital_text_pages_count * 1100)
+            tokens_saved_intermediate = int(
+                gemini_file_pages_count * 900
+                + local_ocr_pages_count * 1100
+                + digital_text_pages_count * 1100
+            )
             inter_stats = {
                 "mode": mode_desc,
                 "is_scanned": is_scanned,
@@ -363,6 +420,7 @@ def extract_mock_questions_from_pdf(
                 "subject_counts": subject_counts,
                 "mock_title": mock_title,
                 "ocr_strategy": ocr_strategy,
+                "gemini_file_pages": gemini_file_pages_count,
                 "local_ocr_pages": local_ocr_pages_count,
                 "vision_fallback_pages": vision_fallback_pages_count,
                 "digital_text_pages": digital_text_pages_count,
@@ -377,7 +435,11 @@ def extract_mock_questions_from_pdf(
             )
 
     # Final stats computation
-    tokens_saved = int(local_ocr_pages_count * 1100 + digital_text_pages_count * 1100)
+    tokens_saved = int(
+        gemini_file_pages_count * 900
+        + local_ocr_pages_count * 1100
+        + digital_text_pages_count * 1100
+    )
     stats = {
         "mode": mode_desc,
         "is_scanned": is_scanned,
@@ -389,6 +451,7 @@ def extract_mock_questions_from_pdf(
         "subject_counts": subject_counts,
         "mock_title": mock_title,
         "ocr_strategy": ocr_strategy,
+        "gemini_file_pages": gemini_file_pages_count,
         "local_ocr_pages": local_ocr_pages_count,
         "vision_fallback_pages": vision_fallback_pages_count,
         "digital_text_pages": digital_text_pages_count,

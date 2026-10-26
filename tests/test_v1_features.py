@@ -835,6 +835,7 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
         self.assertIn("paddleocr", keys)
         self.assertIn("pytesseract", keys)
         self.assertIn("gemini_vision", keys)
+        self.assertIn("gemini_file", keys)
 
         # Gemini Vision cloud fallback must always report available=True
         gemini_eng = next(e for e in engines if e["key"] == "gemini_vision")
@@ -955,6 +956,70 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
             # Must fall back to Gemini Multimodal Vision to guarantee zero lost questions
             self.assertEqual(stats2["local_ocr_pages"], 0)
             self.assertEqual(stats2["vision_fallback_pages"], 2)
+
+    def test_gemini_native_file_api_extraction(self):
+        """Verify extraction using Gemini Native File API with upload and cleanup."""
+        import io
+        from unittest.mock import MagicMock, patch
+        import pypdf
+        import pdf_extractor
+
+        # Create a sample 2-page blank PDF
+        w = pypdf.PdfWriter()
+        w.add_blank_page(width=200, height=200)
+        w.add_blank_page(width=200, height=200)
+        buf = io.BytesIO()
+        w.write(buf)
+        pdf_bytes = buf.getvalue()
+
+        mock_response = MagicMock()
+        mock_response.text = json.dumps({
+            "questions": [
+                {
+                    "question": "Which Mauryan ruler embraced Buddhism after the Kalinga War?",
+                    "option_a": "Chandragupta Maurya",
+                    "option_b": "Bindusara",
+                    "option_c": "Ashoka",
+                    "option_d": "Brihadratha",
+                    "correct_option": "C",
+                    "explanation": "Ashoka embraced Buddhism after witnessing the devastation of the Kalinga War.",
+                    "subject": "Ancient & Medieval History",
+                    "topic": "Mauryan Empire",
+                    "difficulty": "Easy",
+                    "question_type": "Standard MCQ",
+                    "original_language": "English",
+                }
+            ]
+        })
+
+        mock_file = MagicMock()
+        mock_file.name = "files/test_mock_123"
+        mock_file.state = "ACTIVE"
+
+        mock_client = MagicMock()
+        mock_client.files.upload.return_value = mock_file
+        mock_client.models.generate_content.return_value = mock_response
+
+        with patch("config.is_gemini_configured", return_value=True), \
+             patch("ai_service._get_client", return_value=mock_client):
+
+            qs, stats = pdf_extractor.extract_mock_questions_from_pdf(
+                pdf_bytes=pdf_bytes,
+                mock_title="Test Mauryan Mock",
+                ocr_strategy="gemini_file",
+                chunk_size=4,
+            )
+
+            self.assertEqual(len(qs), 1)
+            self.assertEqual(qs[0]["question"], "Which Mauryan ruler embraced Buddhism after the Kalinga War?")
+            self.assertEqual(qs[0]["correct_option"], "C")
+            self.assertEqual(stats["gemini_file_pages"], 2)
+            self.assertEqual(stats["ocr_strategy"], "gemini_file")
+
+            # Verify client.files.upload was called with temporary file
+            self.assertTrue(mock_client.files.upload.called)
+            # Verify client.files.delete was called to clean up uploaded file
+            mock_client.files.delete.assert_called_with(name="files/test_mock_123")
 
     def test_optimize_image_for_fast_ocr(self):
         """Verify that oversized scans (>1600px) are downscaled and converted to grayscale for fast OCR."""

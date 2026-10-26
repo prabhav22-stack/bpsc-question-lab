@@ -84,6 +84,12 @@ def get_available_ocr_engines() -> List[Dict[str, Any]]:
             "available": True,
             "description": "Google Gemini 2.5/1.5 Multimodal Vision (High-accuracy cloud fallback).",
         },
+        {
+            "name": "Gemini Native File API",
+            "key": "gemini_file",
+            "available": True,
+            "description": "Google Gemini Native Document Understanding (Ultra-fast direct PDF upload).",
+        },
     ]
 
 

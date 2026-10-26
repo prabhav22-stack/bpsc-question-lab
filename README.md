@@ -36,6 +36,7 @@ Combines official Google Gemini generative AI, deterministic examination analyti
 
 6. **Mock Questions Bank & Multi-Engine Local OCR Cascade Extractor:**
    - **Dedicated Mock Questions Bank**: Browse, filter, search, and practice third-party test series questions and mock exams with distinct provenance tracking.
+   - **Gemini Native File API Pipeline (`client.files.upload`)**: Ultra-fast direct document understanding that streams raw PDF chunks directly to Google Tensor Cloud. Extracts, translates, and structures 50+ MCQs in ~20–30 seconds with 0 local CPU load or memory strain, automatically deleting temporary files from Google servers upon completion.
    - **Multi-Engine Local OCR Cascade Subsystem (`ocr_engine.py`)**: Supports **RapidOCR** (high-speed ONNX runtime port of PaddleOCR), **PaddleOCR** (Baidu deep learning engine), and **Pytesseract** (Google Tesseract OCR) to process scanned PDF pages locally before querying Gemini.
    - **Persistent Background OCR Engine (`ocr_jobs`)**: Operates on a dedicated background worker decoupled from the frontend browser tab. Extraction continues seamlessly across browser reloads, inactive sessions, or computer sleep.
    - **Interactive Live Progress Bar & Cancellation Action**: Real-time progress bar tracking batch status with a dedicated **"⏹️ Cancel Extraction"** button that halts processing immediately on demand.
@@ -84,7 +85,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 59 tests (19 legacy regression tests + 24 v1.0 feature tests + 16 mock questions, background OCR, deduplication, translation & PDF extractor tests):
+Run all 60 tests (19 legacy regression tests + 24 v1.0 feature tests + 17 mock questions, background OCR, Gemini Native File API, deduplication, translation & PDF extractor tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
