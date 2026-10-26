@@ -1566,9 +1566,16 @@ except ImportError:
 
 
 def connect_db() -> sqlite3.Connection:
-    """Return a connection with Row factory enabled and concurrency timeout."""
+    """Return a high-performance connection with Row factory, WAL mode, and memory caching."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA cache_size = -64000;")
+        conn.execute("PRAGMA temp_store = MEMORY;")
+    except Exception:
+        pass
     return conn
 
 
@@ -1619,6 +1626,28 @@ def init_db() -> None:
             conn.execute("ALTER TABLE questions ADD COLUMN official_qno INTEGER NOT NULL DEFAULT 0")
         if "answer_key_status" not in q_cols:
             conn.execute("ALTER TABLE questions ADD COLUMN answer_key_status TEXT NOT NULL DEFAULT 'Unverified'")
+        if "normalized_stem" not in q_cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN normalized_stem TEXT NOT NULL DEFAULT ''")
+            try:
+                unfilled = conn.execute("SELECT id, question FROM questions WHERE normalized_stem = ''").fetchall()
+                for r in unfilled:
+                    n_stem = normalize_question_text(r["question"])
+                    conn.execute("UPDATE questions SET normalized_stem = ? WHERE id = ?", (n_stem, r["id"]))
+            except Exception:
+                pass
+
+        # High-Speed B-Tree Indexes for Instant Lookups on 7,500+ MCQs
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_normalized_stem ON questions(normalized_stem);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_source_type ON questions(source_type);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_topic ON questions(topic);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_exam ON questions(exam);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_source_name ON questions(source_name);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_exam_edition ON questions(exam_edition);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_difficulty ON questions(difficulty);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_attempts_question_id ON attempts(question_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pinned_question_id ON pinned_notebook(question_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_revision_items_qid ON revision_items(question_id);")
 
         # 2. Attempts table
         conn.execute("""
@@ -1786,6 +1815,8 @@ def insert_question(conn: sqlite3.Connection, item: Dict[str, Any]) -> int:
     payload.setdefault("paper_set", "")
     payload.setdefault("official_qno", 0)
     payload.setdefault("answer_key_status", "Unverified")
+    if "normalized_stem" not in payload or not payload["normalized_stem"]:
+        payload["normalized_stem"] = normalize_question_text(payload.get("question", ""))
     if "created_at" not in payload:
         payload["created_at"] = datetime.now().isoformat(timespec="seconds")
 
@@ -1824,12 +1855,7 @@ def normalize_question_text(text: str) -> str:
 def is_question_duplicate(
     stem: str, conn: Optional[sqlite3.Connection] = None
 ) -> Tuple[bool, Optional[int]]:
-    """Check if a question stem already exists in the database.
-
-    Checks exact match first, then normalized stem match.
-    Returns:
-        (is_duplicate: bool, existing_id: Optional[int])
-    """
+    """Check if a question stem already exists in the database using high-speed index lookups."""
     if not stem or not str(stem).strip():
         return False, None
 
@@ -1837,6 +1863,18 @@ def is_question_duplicate(
     norm_stem = normalize_question_text(raw_stem)
 
     def _check(c: sqlite3.Connection) -> Tuple[bool, Optional[int]]:
+        # 1. Fast indexed B-Tree lookup via idx_questions_normalized_stem
+        try:
+            row = c.execute(
+                "SELECT id FROM questions WHERE normalized_stem = ? LIMIT 1",
+                (norm_stem,),
+            ).fetchone()
+            if row:
+                return True, int(row[0])
+        except Exception:
+            pass
+
+        # 2. Exact raw stem match
         row = c.execute(
             "SELECT id FROM questions WHERE lower(trim(question)) = lower(trim(?)) LIMIT 1",
             (raw_stem,),
@@ -1844,10 +1882,6 @@ def is_question_duplicate(
         if row:
             return True, int(row[0])
 
-        all_stems = c.execute("SELECT id, question FROM questions").fetchall()
-        for qid, q_text in all_stems:
-            if normalize_question_text(q_text) == norm_stem:
-                return True, int(qid)
         return False, None
 
     if conn is not None:
@@ -1862,18 +1896,46 @@ def filter_duplicate_questions(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Separate a list of questions into unique new questions and duplicate questions.
 
-    Deduplicates both intra-batch (within the incoming list) and against the database.
-
-    Returns:
-        (unique_questions, duplicate_questions)
+    Uses high-speed B-Tree index batch lookups to handle 7,500+ question databases in milliseconds.
     """
     unique_list: List[Dict[str, Any]] = []
     duplicate_list: List[Dict[str, Any]] = []
     seen_batch_stems: set = set()
 
     def _process(c: sqlite3.Connection):
-        db_rows = c.execute("SELECT id, question FROM questions").fetchall()
-        db_stems = {normalize_question_text(r[1]): int(r[0]) for r in db_rows if r[1]}
+        # Extract all normalized stems in this incoming batch
+        batch_norms = [normalize_question_text(q.get("question", "")) for q in questions]
+        clean_norms = [n for n in batch_norms if n]
+
+        # Fast indexed query for only the stems in this batch
+        existing_stems: Dict[str, int] = {}
+        cols = {r[1] for r in c.execute("PRAGMA table_info(questions)").fetchall()}
+        has_norm = "normalized_stem" in cols
+
+        if has_norm and clean_norms:
+            # Query in chunks of 400 to stay well under SQLite parameter limits
+            for i in range(0, len(clean_norms), 400):
+                sub_norms = clean_norms[i : i + 400]
+                placeholders = ",".join("?" for _ in sub_norms)
+                try:
+                    rows = c.execute(
+                        f"SELECT normalized_stem, id FROM questions WHERE normalized_stem IN ({placeholders})",
+                        sub_norms,
+                    ).fetchall()
+                    for r in rows:
+                        if r[0]:
+                            existing_stems[r[0]] = int(r[1])
+                except Exception:
+                    pass
+        elif not has_norm:
+            # Fallback for legacy schemas without normalized_stem column
+            try:
+                db_rows = c.execute("SELECT id, question FROM questions").fetchall()
+                for qid, q_text in db_rows:
+                    if q_text:
+                        existing_stems[normalize_question_text(q_text)] = int(qid)
+            except Exception:
+                pass
 
         for q in questions:
             stem = q.get("question", "")
@@ -1887,11 +1949,12 @@ def filter_duplicate_questions(
                 )
                 continue
 
-            if norm in db_stems:
+            if norm in existing_stems:
+                qid = existing_stems[norm]
                 duplicate_list.append(
                     {
                         **q,
-                        "duplicate_reason": f"Already exists in Question Bank (#Q{db_stems[norm]})",
+                        "duplicate_reason": f"Already exists in Question Bank (#Q{qid})",
                     }
                 )
                 continue
@@ -2070,8 +2133,15 @@ def add_question(item: Dict[str, Any], skip_if_duplicate: bool = False) -> int:
         return qid
 
 
-def list_questions(exam: str = "All", subject: str = "All", topic: str = "All", source_type: str = "All") -> pd.DataFrame:
-    """Retrieve filtered questions."""
+def list_questions(
+    exam: str = "All",
+    subject: str = "All",
+    topic: str = "All",
+    source_type: str = "All",
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> pd.DataFrame:
+    """Retrieve filtered questions with optional LIMIT and OFFSET."""
     query = "SELECT * FROM questions WHERE 1=1"
     params: List[Any] = []
     if exam != "All":
@@ -2087,8 +2157,171 @@ def list_questions(exam: str = "All", subject: str = "All", topic: str = "All", 
         query += " AND source_type = ?"
         params.append(source_type)
     query += " ORDER BY subject, topic, id"
+    if limit is not None:
+        query += f" LIMIT {int(limit)} OFFSET {int(offset)}"
     with connect_db() as conn:
         return pd.read_sql_query(query, conn, params=params)
+
+
+def count_questions(
+    exam: str = "All",
+    subject: str = "All",
+    topic: str = "All",
+    source_type: str = "All",
+    conn_factory: Any = None,
+) -> int:
+    """Return count of questions matching criteria using fast SQLite index."""
+    query = "SELECT COUNT(*) FROM questions WHERE 1=1"
+    params: List[Any] = []
+    if exam != "All":
+        query += " AND exam IN (?, 'Both')"
+        params.append(exam)
+    if subject != "All":
+        query += " AND subject = ?"
+        params.append(subject)
+    if topic != "All":
+        query += " AND topic = ?"
+        params.append(topic)
+    if source_type != "All":
+        query += " AND source_type = ?"
+        params.append(source_type)
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        return int(conn.execute(query, params).fetchone()[0])
+
+
+def get_question_bank_summary(conn_factory: Any = None) -> Dict[str, Any]:
+    """Return fast aggregated metrics for the question bank without loading rows into Pandas."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) as total_questions,
+                SUM(CASE WHEN source_type = 'Official PYQ' THEN 1 ELSE 0 END) as pyq_count,
+                SUM(CASE WHEN source_type = 'Mock question' THEN 1 ELSE 0 END) as mock_count,
+                SUM(CASE WHEN source_type = 'AI-generated' THEN 1 ELSE 0 END) as ai_count,
+                SUM(CASE WHEN source_type = 'Built-in sample' THEN 1 ELSE 0 END) as sample_count,
+                COUNT(DISTINCT subject) as distinct_subjects,
+                COUNT(DISTINCT source_name) as distinct_sources
+            FROM questions
+            """
+        ).fetchone()
+        if not row:
+            return {
+                "total_questions": 0,
+                "pyq_count": 0,
+                "mock_count": 0,
+                "ai_count": 0,
+                "sample_count": 0,
+                "distinct_subjects": 0,
+                "distinct_sources": 0,
+            }
+        return {
+            "total_questions": int(row["total_questions"] or 0),
+            "pyq_count": int(row["pyq_count"] or 0),
+            "mock_count": int(row["mock_count"] or 0),
+            "ai_count": int(row["ai_count"] or 0),
+            "sample_count": int(row["sample_count"] or 0),
+            "distinct_subjects": int(row["distinct_subjects"] or 0),
+            "distinct_sources": int(row["distinct_sources"] or 0),
+        }
+
+
+def get_distinct_subjects(source_type: str = "All", conn_factory: Any = None) -> List[str]:
+    """Return distinct subjects using fast indexed query."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        if source_type != "All":
+            rows = conn.execute(
+                "SELECT DISTINCT subject FROM questions WHERE source_type = ? AND subject != '' ORDER BY subject",
+                (source_type,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT subject FROM questions WHERE subject != '' ORDER BY subject"
+            ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
+
+def get_distinct_topics(subject: str = "All", source_type: str = "All", conn_factory: Any = None) -> List[str]:
+    """Return distinct topics using fast indexed query."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        query = "SELECT DISTINCT topic FROM questions WHERE topic != ''"
+        params: List[Any] = []
+        if subject != "All":
+            query += " AND subject = ?"
+            params.append(subject)
+        if source_type != "All":
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY topic"
+        rows = conn.execute(query, params).fetchall()
+        return [r[0] for r in rows if r[0]]
+
+
+def get_distinct_editions(source_type: str = "All", conn_factory: Any = None) -> List[str]:
+    """Return distinct exam editions using fast indexed query."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        if source_type != "All":
+            rows = conn.execute(
+                "SELECT DISTINCT exam_edition FROM questions WHERE source_type = ? AND exam_edition != '' ORDER BY exam_edition",
+                (source_type,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT exam_edition FROM questions WHERE exam_edition != '' ORDER BY exam_edition"
+            ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
+
+def get_subject_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+    """Return question distribution per subject using fast indexed group by."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        if source_type != "All":
+            rows = conn.execute(
+                "SELECT subject, COUNT(*) FROM questions WHERE source_type = ? GROUP BY subject ORDER BY COUNT(*) DESC",
+                (source_type,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY COUNT(*) DESC"
+            ).fetchall()
+        return {r[0]: int(r[1]) for r in rows if r[0]}
+
+
+def get_difficulty_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+    """Return question distribution per difficulty using fast indexed group by."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        if source_type != "All":
+            rows = conn.execute(
+                "SELECT difficulty, COUNT(*) FROM questions WHERE source_type = ? GROUP BY difficulty",
+                (source_type,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT difficulty, COUNT(*) FROM questions GROUP BY difficulty"
+            ).fetchall()
+        return {r[0]: int(r[1]) for r in rows if r[0]}
+
+
+def get_pinned_questions_df(conn_factory: Any = None) -> pd.DataFrame:
+    """Instant indexed retrieval of all pinned questions via single SQL join."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT q.*, p.pinned_at, p.note as pin_notes
+            FROM questions q
+            JOIN pinned_notebook p ON q.id = p.question_id
+            ORDER BY p.pinned_at DESC
+            """,
+            conn,
+        )
 
 
 def list_mock_questions(
@@ -2096,8 +2329,10 @@ def list_mock_questions(
     subject: str = "All",
     topic: str = "All",
     mock_name: str = "All",
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> pd.DataFrame:
-    """Retrieve filtered mock questions (source_type = 'Mock question')."""
+    """Retrieve filtered mock questions with optional LIMIT and OFFSET."""
     query = "SELECT * FROM questions WHERE source_type = 'Mock question'"
     params: List[Any] = []
     if exam != "All":
@@ -2113,6 +2348,8 @@ def list_mock_questions(
         query += " AND source_name = ?"
         params.append(mock_name)
     query += " ORDER BY subject, topic, id"
+    if limit is not None:
+        query += f" LIMIT {int(limit)} OFFSET {int(offset)}"
     with connect_db() as conn:
         return pd.read_sql_query(query, conn, params=params)
 
@@ -2141,7 +2378,14 @@ def delete_mock_test(source_name: str) -> int:
         return cur.rowcount
 
 
-def get_question_ids(exam: str = "All", subject: str = "All", topic: str = "All", source_type: str = "All") -> List[int]:
+def get_question_ids(
+    exam: str = "All",
+    subject: str = "All",
+    topic: str = "All",
+    source_type: str = "All",
+    exam_edition: str = "All",
+    source_name: str = "All",
+) -> List[int]:
     """Return IDs of questions matching criteria."""
     query = "SELECT id FROM questions WHERE 1=1"
     params: List[Any] = []
@@ -2157,6 +2401,12 @@ def get_question_ids(exam: str = "All", subject: str = "All", topic: str = "All"
     if source_type != "All":
         query += " AND source_type = ?"
         params.append(source_type)
+    if exam_edition != "All":
+        query += " AND exam_edition = ?"
+        params.append(exam_edition)
+    if source_name != "All":
+        query += " AND source_name = ?"
+        params.append(source_name)
     with connect_db() as conn:
         return [int(row[0]) for row in conn.execute(query, params).fetchall()]
 
@@ -2484,6 +2734,14 @@ def is_question_pinned(question_id: int) -> bool:
             "SELECT 1 FROM pinned_notebook WHERE question_id = ? LIMIT 1", (question_id,)
         ).fetchone()
         return bool(row)
+
+
+def get_pinned_question_ids() -> Set[int]:
+    """Fetch set of all pinned question IDs for fast O(1) membership checks."""
+    with connect_db() as conn:
+        rows = conn.execute("SELECT question_id FROM pinned_notebook").fetchall()
+        return {int(r["question_id"]) for r in rows}
+
 
 
 def save_research_note(

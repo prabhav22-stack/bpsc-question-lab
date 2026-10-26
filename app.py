@@ -584,14 +584,8 @@ def _resolve_question_options(question_id: Optional[int], fallback_row: Optional
 
 
 def get_pinned_questions_df() -> pd.DataFrame:
-    """Safely retrieve all pinned questions with their metadata."""
-    all_q = db.list_questions()
-    if all_q.empty:
-        return pd.DataFrame()
-    pinned_ids = [int(qid) for qid in all_q["id"].tolist() if db.is_question_pinned(int(qid))]
-    if not pinned_ids:
-        return pd.DataFrame()
-    return all_q[all_q["id"].isin(pinned_ids)].copy()
+    """Safely retrieve all pinned questions with their metadata using fast indexed join."""
+    return db.get_pinned_questions_df()
 
 
 def get_saved_research_notes() -> pd.DataFrame:
@@ -707,8 +701,9 @@ def init_session_state() -> None:
 
 def show_dashboard() -> None:
     """Overview dashboard with key deterministic metrics, confidence telemetry, and study tools."""
-    q_all = db.list_questions()
-    pyq_count = len(q_all[q_all["source_type"] == "Official PYQ"]) if not q_all.empty else 0
+    qb_stats = db.get_question_bank_summary()
+    total_q_count = qb_stats["total_questions"]
+    pyq_count = qb_stats["pyq_count"]
 
     st.markdown(
         f"""
@@ -742,7 +737,7 @@ def show_dashboard() -> None:
 
     # Top KPI Metrics
     k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("Question Bank", len(q_all))
+    k1.metric("Question Bank", total_q_count)
     k2.metric("Tests Completed", overall["total_tests"])
     k3.metric("Total Attempts", overall["total_attempts"])
     k4.metric(
@@ -1002,8 +997,6 @@ def show_question_bank() -> None:
         "➕ Add Manually & CSV Import",
     ])
 
-    all_questions = db.list_questions()
-
     # =========================================================================
     # Tab 1: Mock Questions Bank (Dedicated Mock Question Section)
     # =========================================================================
@@ -1011,56 +1004,56 @@ def show_question_bank() -> None:
         st.subheader("📝 Mock Questions Bank")
         st.write("Curated test series questions, coaching institute mock papers, and PDF extractions sorted by syllabus subject.")
 
-        mock_df = db.list_mock_questions()
+        mock_total = db.count_questions(source_type="Mock question")
 
-        if mock_df.empty:
+        if mock_total == 0:
             st.info(
                 "ℹ️ **No mock questions in the database yet.**\n\n"
                 "You can upload OCR text PDFs or scanned image test papers in the **'📄 Upload Mock PDF & OCR Extractor'** "
                 "tab. The AI will extract all questions, answers, and explanations, and automatically sort them into standard subjects!"
             )
         else:
+            mock_names = ["All Mock Tests"] + db.get_mock_test_names()
+            mock_subjects = ["All"] + db.get_distinct_subjects(source_type="Mock question")
+            diff_counts = db.get_difficulty_counts(source_type="Mock question")
+
             # Top KPI metrics for Mock Questions
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Mock Questions", len(mock_df))
-            m2.metric("Mock Test Series", mock_df["source_name"].nunique())
-            m3.metric("Subjects Covered", mock_df["subject"].nunique())
-            diff_counts = mock_df["difficulty"].value_counts().to_dict()
+            m1.metric("Mock Questions", f"{mock_total:,}")
+            m2.metric("Mock Test Series", max(0, len(mock_names) - 1))
+            m3.metric("Subjects Covered", max(0, len(mock_subjects) - 1))
             m4.metric("Medium / Hard", f"{diff_counts.get('Medium', 0)} / {diff_counts.get('Hard', 0)}")
 
             # Subject Distribution Chips
-            st.markdown("##### 🧭 Subject Breakdown in Mock Database")
-            subj_counts = mock_df["subject"].value_counts()
-            s_cols = st.columns(min(5, len(subj_counts) or 1))
-            for idx, (s_name, s_val) in enumerate(subj_counts.items()):
-                s_cols[idx % len(s_cols)].metric(s_name, f"{s_val} Qs")
-
-            st.divider()
+            subj_counts = db.get_subject_counts(source_type="Mock question")
+            if subj_counts:
+                st.markdown("##### 🧭 Subject Breakdown in Mock Database")
+                s_cols = st.columns(min(5, len(subj_counts) or 1))
+                for idx, (s_name, s_val) in enumerate(subj_counts.items()):
+                    s_cols[idx % len(s_cols)].metric(s_name, f"{s_val} Qs")
+                st.divider()
 
             # Filter Controls for Mock Questions
             fc1, fc2, fc3, fc4, fc5 = st.columns([1.5, 1.2, 1.2, 1.0, 1.5])
-            mock_names = ["All Mock Tests"] + sorted([m for m in mock_df["source_name"].dropna().unique().tolist() if m.strip()])
             selected_mock = fc1.selectbox("Mock Test Series", mock_names, key="mock_filter_series")
-
-            mock_subjects = ["All"] + sorted(mock_df["subject"].dropna().unique().tolist())
             selected_subject = fc2.selectbox("Subject", mock_subjects, key="mock_filter_subject")
 
-            interim_mock = mock_df if selected_subject == "All" else mock_df[mock_df["subject"] == selected_subject]
-            mock_topics = ["All"] + sorted(interim_mock["topic"].dropna().unique().tolist())
+            mock_topics = ["All"] + db.get_distinct_topics(
+                subject=selected_subject if selected_subject != "All" else None,
+                source_type="Mock question",
+            )
             selected_topic = fc3.selectbox("Topic", mock_topics, key="mock_filter_topic")
 
             selected_diff = fc4.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="mock_filter_diff")
             search_mock_kw = fc5.text_input("Search Mock Questions", placeholder="e.g. Fundamental Rights, Bihar...", key="mock_kw")
 
-            # Apply filters
-            filtered_mock = mock_df.copy()
-            if selected_mock != "All Mock Tests":
-                filtered_mock = filtered_mock[filtered_mock["source_name"] == selected_mock]
-            if selected_subject != "All":
-                filtered_mock = filtered_mock[filtered_mock["subject"] == selected_subject]
-            if selected_topic != "All":
-                filtered_mock = filtered_mock[filtered_mock["topic"] == selected_topic]
-            if selected_diff != "All":
+            # Apply indexed query filters
+            filtered_mock = db.list_mock_questions(
+                subject=selected_subject,
+                topic=selected_topic,
+                mock_name=selected_mock,
+            )
+            if selected_diff != "All" and "difficulty" in filtered_mock.columns:
                 filtered_mock = filtered_mock[filtered_mock["difficulty"] == selected_diff]
             if search_mock_kw.strip():
                 kw = search_mock_kw.strip().lower()
@@ -1072,7 +1065,7 @@ def show_question_bank() -> None:
 
             # Action bar: Practice Mock Test
             act_col1, act_col2 = st.columns([3, 1])
-            act_col1.caption(f"Showing **{len(filtered_mock)}** of **{len(mock_df)}** mock question(s).")
+            act_col1.caption(f"Showing **{len(filtered_mock)}** of **{mock_total}** mock question(s).")
             if not filtered_mock.empty and act_col2.button("🎯 Practice Filtered Mock Set", type="primary", use_container_width=True, key="btn_mock_practice"):
                 f_ids = filtered_mock["id"].astype(int).tolist()
                 chosen = random.sample(f_ids, k=min(25, len(f_ids)))
@@ -1095,10 +1088,12 @@ def show_question_bank() -> None:
                 st.session_state["test_results"] = None
                 navigate_to("Practice & Mock Tests")
 
-            # Data Table
+            # Data Table (bounded preview to prevent WebSocket freezing with 7,500+ items)
             disp_mock_cols = ["id", "source_name", "subject", "topic", "question", "correct_option", "difficulty", "answer_key_status"]
             avail_m_cols = [c for c in disp_mock_cols if c in filtered_mock.columns]
-            st.dataframe(filtered_mock[avail_m_cols], use_container_width=True, hide_index=True)
+            st.dataframe(filtered_mock[avail_m_cols].head(150), use_container_width=True, hide_index=True)
+            if len(filtered_mock) > 150:
+                st.caption(f"⚡ Showing first 150 rows in the preview grid for high performance. Browse all {len(filtered_mock)} questions via the cards below.")
 
             # Paginated Cards
             with st.expander("🔍 Browse Detailed Mock Question Cards (Paginated)", expanded=True):
@@ -1126,14 +1121,15 @@ def show_question_bank() -> None:
 
                 if st.session_state.get("dupe_scan_run"):
                     with db.connect_db() as conn:
-                        all_rows = conn.execute("SELECT id, question, subject, topic FROM questions ORDER BY id ASC").fetchall()
-                    seen_dupes: Dict[str, List[int]] = {}
-                    for r in all_rows:
-                        norm = db.normalize_question_text(r["question"])
-                        if norm:
-                            seen_dupes.setdefault(norm, []).append(int(r["id"]))
-                    found_dupes = {k: v for k, v in seen_dupes.items() if len(v) > 1}
-                    total_excess = sum(len(v) - 1 for v in found_dupes.values())
+                        dupe_rows = conn.execute("""
+                            SELECT normalized_stem, COUNT(*) as cnt, GROUP_CONCAT(id) as id_list
+                            FROM questions
+                            WHERE normalized_stem != ''
+                            GROUP BY normalized_stem
+                            HAVING cnt > 1
+                        """).fetchall()
+                    total_excess = sum(int(r["cnt"]) - 1 for r in dupe_rows)
+                    found_dupes = {r["normalized_stem"]: [int(x) for x in r["id_list"].split(",")] for r in dupe_rows}
 
                     if total_excess == 0:
                         st.success("✅ **Integrity Verified:** Zero duplicate questions detected! Every question in your database is 100% unique.")
@@ -1525,7 +1521,7 @@ def show_question_bank() -> None:
     # Tab 3: 10-Year Official PYQ Bank
     # =========================================================================
     with tab_pyqs:
-        pyq_subset = all_questions[all_questions["source_type"] == "Official PYQ"] if not all_questions.empty else pd.DataFrame()
+        pyq_subset = db.list_questions(source_type="Official PYQ")
         st.subheader(f"🏛️ 10-Year BPSC Official PYQ Vault ({len(pyq_subset)} Authentic Questions · 60th to 70th CCE)")
         st.write("Browse and filter authentic BPSC questions from official examination papers across the last 10 years.")
 
@@ -1607,10 +1603,12 @@ def show_question_bank() -> None:
                 st.session_state["test_results"] = None
                 navigate_to("Practice & Mock Tests")
 
-            # PYQ table & cards
+            # PYQ table & cards (bounded preview for high performance)
             disp_pyq_cols = ["id", "exam_edition", "exam_year", "paper_set", "official_qno", "subject", "topic", "question", "correct_option", "answer_key_status"]
             avail_pyq_cols = [c for c in disp_pyq_cols if c in f_pyq.columns]
-            st.dataframe(f_pyq[avail_pyq_cols], use_container_width=True, hide_index=True)
+            st.dataframe(f_pyq[avail_pyq_cols].head(150), use_container_width=True, hide_index=True)
+            if len(f_pyq) > 150:
+                st.caption(f"⚡ Showing first 150 rows in the preview grid for high performance. Browse all {len(f_pyq)} questions via the cards below.")
 
             with st.expander("🔍 Browse Official PYQ Cards (Paginated)", expanded=True):
                 if f_pyq.empty:
@@ -1637,19 +1635,19 @@ def show_question_bank() -> None:
         st.subheader("🔍 All Questions Vault")
         st.write("Unified cross-category browser covering Official PYQs, Mock Questions, AI Drills, and Practice Sets.")
 
-        if all_questions.empty:
+        total_vault_count = db.count_questions()
+        if total_vault_count == 0:
             st.info("Your question bank is empty. Add a question or import a CSV.")
         else:
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.2, 1.2, 1.3, 1.1, 0.9, 1.4])
             exam_filter = c1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
-            subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
+            subjects = ["All"] + db.get_distinct_subjects(exam=exam_filter)
             subject_filter = c2.selectbox("Subject", subjects, key="qb_subj")
 
-            interim = db.list_questions(exam=exam_filter, subject=subject_filter)
-            topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
+            topics = ["All"] + db.get_distinct_topics(subject=subject_filter if subject_filter != "All" else None, exam=exam_filter)
             topic_filter = c3.selectbox("Topic", topics, key="qb_top")
 
-            editions_list = ["All"] + sorted([e for e in all_questions["exam_edition"].dropna().unique().tolist() if e.strip()])
+            editions_list = ["All"] + db.get_distinct_editions()
             edition_filter = c4.selectbox("Exam Edition", editions_list, key="qb_ed")
 
             src_choices = ["All", "Official PYQ", "Mock question", "Built-in sample", "AI-generated", "User-added"]
@@ -1666,8 +1664,8 @@ def show_question_bank() -> None:
                 filtered = filtered[filtered["difficulty"] == diff_filter]
 
             if only_pinned and not filtered.empty:
-                pinned_ids = [int(qid) for qid in filtered["id"].tolist() if db.is_question_pinned(int(qid))]
-                filtered = filtered[filtered["id"].isin(pinned_ids)]
+                pinned_ids = db.get_pinned_question_ids()
+                filtered = filtered[filtered["id"].astype(int).isin(pinned_ids)]
 
             if search_query.strip():
                 term = search_query.strip().lower()
@@ -1678,7 +1676,7 @@ def show_question_bank() -> None:
                 ]
 
             act_c1, act_c2 = st.columns([3, 1])
-            act_c1.caption(f"Showing **{len(filtered)}** of **{len(all_questions)}** total question(s).")
+            act_c1.caption(f"Showing **{len(filtered)}** of **{total_vault_count}** total question(s).")
             if not filtered.empty and act_c2.button("🎯 Practice Filtered Set", use_container_width=True, key="btn_all_practice"):
                 f_ids = filtered["id"].astype(int).tolist()
                 chosen = random.sample(f_ids, k=min(15, len(f_ids)))
@@ -1715,7 +1713,9 @@ def show_question_bank() -> None:
                 "answer_key_status",
             ]
             available_cols = [c for c in disp_cols if c in filtered.columns]
-            st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
+            st.dataframe(filtered[available_cols].head(150), use_container_width=True, hide_index=True)
+            if len(filtered) > 150:
+                st.caption(f"⚡ Showing first 150 rows in the preview grid for high performance. Browse all {len(filtered)} questions via the cards below.")
 
             with st.expander("🔍 Browse Detailed Question Cards (Paginated)", expanded=True):
                 if filtered.empty:
@@ -1736,9 +1736,9 @@ def show_question_bank() -> None:
             st.divider()
             col_exp1, col_exp2 = st.columns(2)
             with col_exp1:
-                csv_bytes = all_questions.to_csv(index=False).encode("utf-8")
+                csv_bytes = filtered.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    "⬇️ Export Full Question Bank to CSV",
+                    f"⬇️ Export Current View ({len(filtered)} Qs) to CSV",
                     data=csv_bytes,
                     file_name="bpsc_question_bank_export.csv",
                     mime="text/csv",
@@ -2732,19 +2732,19 @@ def show_practice() -> None:
     # -------------------------------------------------------------------------
     # C. Configuration for Starting a New Test Session
     # -------------------------------------------------------------------------
-    all_pyqs_df = db.list_questions(source_type="Official PYQ")
-    if not all_pyqs_df.empty:
+    pyq_total_count = db.count_questions(source_type="Official PYQ")
+    if pyq_total_count > 0:
         with st.container(border=True):
             p_col_txt, p_col_btn = st.columns([3, 1.2])
             with p_col_txt:
                 st.markdown("##### 🏛️ Quick Launch: 10-Year Authentic BPSC PYQ Mock Drill")
                 st.caption(
-                    f"Test your preparation against **{len(all_pyqs_df)}** authentic official questions (60th to 70th CCE) "
+                    f"Test your preparation against **{pyq_total_count}** authentic official questions (60th to 70th CCE) "
                     "with real BPSC -0.33 negative marking and Interactive OMR Palette."
                 )
             with p_col_btn:
                 if st.button("🎯 Launch 15-Q PYQ Mock", type="primary", use_container_width=True):
-                    pyq_ids = all_pyqs_df["id"].astype(int).tolist()
+                    pyq_ids = db.get_question_ids(source_type="Official PYQ")
                     chosen = random.sample(pyq_ids, k=min(15, len(pyq_ids)))
                     st.session_state["active_test"] = {
                         "session_id": str(uuid.uuid4())[:8],
@@ -2769,10 +2769,9 @@ def show_practice() -> None:
         st.subheader("Configure Custom Practice or Mock Session")
         f1, f2, f3, f4 = st.columns(4)
         exam = f1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="p_exam")
-        subjects = ["All"] + sorted(db.list_questions()["subject"].dropna().unique().tolist())
+        subjects = ["All"] + db.get_distinct_subjects(exam=exam)
         subject = f2.selectbox("Subject", subjects, key="p_subj")
-        interim = db.list_questions(exam=exam, subject=subject)
-        topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
+        topics = ["All"] + db.get_distinct_topics(subject=subject if subject != "All" else None, exam=exam)
         topic = f3.selectbox("Topic", topics, key="p_top")
         src_types = [
             "All Questions",
@@ -2792,26 +2791,33 @@ def show_practice() -> None:
             "Starter Samples": "Built-in sample",
             "Pinned Questions Only": "All",
         }
-        matching_ids = db.get_question_ids(exam, subject, topic, source_type=src_map[src_choice])
+
+        chosen_ed = "All"
+        if src_choice == "Official PYQs Only":
+            ed_opts = ["All 10-Year Editions"] + db.get_distinct_editions()
+            sel_ed = st.selectbox("Filter Specific BPSC Exam Edition (Optional)", ed_opts, key="p_ed_sub")
+            if sel_ed != "All 10-Year Editions":
+                chosen_ed = sel_ed
+
+        chosen_mock = "All"
+        if src_choice == "Mock Questions Only":
+            mock_opts = ["All Mock Tests"] + db.get_mock_test_names()
+            if len(mock_opts) > 2:
+                sel_m = st.selectbox("Filter Specific Mock Test (Optional)", mock_opts, key="p_mock_sub")
+                if sel_m != "All Mock Tests":
+                    chosen_mock = sel_m
+
+        matching_ids = db.get_question_ids(
+            exam=exam,
+            subject=subject,
+            topic=topic,
+            source_type=src_map[src_choice],
+            exam_edition=chosen_ed,
+            source_name=chosen_mock,
+        )
         if src_choice == "Pinned Questions Only":
-            matching_ids = [qid for qid in matching_ids if db.is_question_pinned(int(qid))]
-
-        if src_choice == "Official PYQs Only" and matching_ids:
-            q_df_sub = db.get_questions_by_ids(matching_ids)
-            if not q_df_sub.empty and "exam_edition" in q_df_sub.columns:
-                ed_opts = ["All 10-Year Editions"] + sorted([e for e in q_df_sub["exam_edition"].dropna().unique().tolist() if e.strip()])
-                chosen_ed = st.selectbox("Filter Specific BPSC Exam Edition (Optional)", ed_opts, key="p_ed_sub")
-                if chosen_ed != "All 10-Year Editions":
-                    matching_ids = q_df_sub[q_df_sub["exam_edition"] == chosen_ed]["id"].astype(int).tolist()
-
-        if src_choice == "Mock Questions Only" and matching_ids:
-            q_df_sub = db.get_questions_by_ids(matching_ids)
-            if not q_df_sub.empty and "source_name" in q_df_sub.columns:
-                mock_opts = ["All Mock Tests"] + sorted([m for m in q_df_sub["source_name"].dropna().unique().tolist() if m.strip()])
-                if len(mock_opts) > 2:
-                    chosen_mock = st.selectbox("Filter Specific Mock Test (Optional)", mock_opts, key="p_mock_sub")
-                    if chosen_mock != "All Mock Tests":
-                        matching_ids = q_df_sub[q_df_sub["source_name"] == chosen_mock]["id"].astype(int).tolist()
+            pinned_set = db.get_pinned_question_ids()
+            matching_ids = [qid for qid in matching_ids if qid in pinned_set]
 
         if not matching_ids:
             st.warning("No questions match these filters. Adjust filters or generate new questions in AI Studio.")
