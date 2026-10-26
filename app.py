@@ -170,6 +170,25 @@ if not hasattr(db, "get_pinned_questions_df"):
             """, conn)
     db.get_pinned_questions_df = _fallback_get_pinned_questions_df
 
+if not hasattr(db, "add_questions_batch"):
+    def _fallback_add_questions_batch(items: List[Dict[str, Any]], skip_if_duplicate: bool = False) -> int:
+        if not items:
+            return 0
+        with db.connect_db() as conn:
+            to_insert = items
+            if skip_if_duplicate:
+                to_insert, _ = db.filter_duplicate_questions(items, conn=conn)
+            inserted_cnt = 0
+            for item in to_insert:
+                try:
+                    db.insert_question(conn, item)
+                    inserted_cnt += 1
+                except Exception:
+                    pass
+            conn.commit()
+            return inserted_cnt
+    db.add_questions_batch = _fallback_add_questions_batch
+
 APP_VERSION = "2.0.0"
 
 # -----------------------------------------------------------------------------
@@ -983,10 +1002,10 @@ def show_dashboard() -> None:
             navigate_to("Revision Planner")
 
         # Instant 5-Question Quick Drill
-        if not q_all.empty:
+        if total_q_count > 0:
             st.markdown("##### ⚡ 5-Minute Express Drill")
             if st.button("Launch 5-Q Mixed BPSC Drill (-0.33 Marking)", use_container_width=True):
-                all_ids = q_all["id"].astype(int).tolist()
+                all_ids = db.get_question_ids(exam="BPSC") or db.get_question_ids()
                 chosen = random.sample(all_ids, k=min(5, len(all_ids)))
                 st.session_state["active_test"] = {
                     "session_id": str(uuid.uuid4())[:8],
@@ -1192,16 +1211,9 @@ def show_question_bank() -> None:
                 subject=selected_subject,
                 topic=selected_topic,
                 mock_name=selected_mock,
+                difficulty=selected_diff,
+                keyword=search_mock_kw,
             )
-            if selected_diff != "All" and "difficulty" in filtered_mock.columns:
-                filtered_mock = filtered_mock[filtered_mock["difficulty"] == selected_diff]
-            if search_mock_kw.strip():
-                kw = search_mock_kw.strip().lower()
-                filtered_mock = filtered_mock[
-                    filtered_mock["question"].str.lower().str.contains(kw, na=False)
-                    | filtered_mock["topic"].str.lower().str.contains(kw, na=False)
-                    | filtered_mock["explanation"].str.lower().str.contains(kw, na=False)
-                ]
 
             # Action bar: Practice Mock Test
             act_col1, act_col2 = st.columns([3, 1])
@@ -1554,8 +1566,13 @@ def show_question_bank() -> None:
                     st.session_state["extracted_mock_preview"] = None
                     st.rerun()
             else:
-                # 1. Deduplicate against existing question bank
-                unique_qs, duplicate_qs = db.filter_duplicate_questions(ext_questions)
+                # 1. Deduplicate against existing question bank (cached in session to avoid recalculating on every rerun)
+                if "unique_qs" not in prev_info or "duplicate_qs" not in prev_info:
+                    u_qs, d_qs = db.filter_duplicate_questions(ext_questions)
+                    prev_info["unique_qs"] = u_qs
+                    prev_info["duplicate_qs"] = d_qs
+                unique_qs = prev_info["unique_qs"]
+                duplicate_qs = prev_info["duplicate_qs"]
 
                 # 2. Key Telemetry Metrics
                 k1, k2, k3, k4, k5 = st.columns(5)
@@ -1594,12 +1611,15 @@ def show_question_bank() -> None:
                         if len(duplicate_qs) > 25:
                             st.caption(f"... and {len(duplicate_qs) - 25} more duplicate questions safely filtered out.")
 
-                # 3. Subject Sorting Distribution Grid
+                # 3. Subject Sorting Distribution Grid (cached in session state)
                 st.markdown("#### 🧭 Automatic Subject Distribution (New Unique Questions)")
-                u_subj_counts: Dict[str, int] = {}
-                for q in unique_qs:
-                    s_name = q.get("subject", "Other")
-                    u_subj_counts[s_name] = u_subj_counts.get(s_name, 0) + 1
+                if "u_subj_counts" not in prev_info:
+                    u_subj: Dict[str, int] = {}
+                    for q in unique_qs:
+                        s_name = q.get("subject", "Other")
+                        u_subj[s_name] = u_subj.get(s_name, 0) + 1
+                    prev_info["u_subj_counts"] = u_subj
+                u_subj_counts = prev_info["u_subj_counts"]
 
                 if u_subj_counts:
                     dist_cols = st.columns(min(5, len(u_subj_counts)))
@@ -1608,29 +1628,34 @@ def show_question_bank() -> None:
                 elif len(unique_qs) == 0:
                     st.warning("⚠️ **All questions in this PDF already exist in your Question Bank!** Zero duplicate questions will be inserted.")
 
-                # 4. Preview Data Table
+                # 4. Preview Data Table (bounded preview to prevent WebSocket freezing)
                 if unique_qs:
-                    prev_df = pd.DataFrame(unique_qs)
+                    preview_slice = unique_qs[:100]
+                    prev_df = pd.DataFrame(preview_slice)
                     cols_to_preview = ["subject", "topic", "question", "correct_option", "difficulty", "explanation"]
                     avail_prev_cols = [c for c in cols_to_preview if c in prev_df.columns]
                     st.dataframe(prev_df[avail_prev_cols], use_container_width=True, hide_index=True)
+                    if len(unique_qs) > 100:
+                        st.caption(f"⚡ Showing first 100 of {len(unique_qs):,} extracted questions in preview table. All {len(unique_qs):,} unique questions will be saved.")
 
-                    with st.expander(f"🔍 Inspect All {len(unique_qs)} Unique Question Cards Before Saving", expanded=False):
-                        for idx, q_dict in enumerate(unique_qs):
-                            _render_question_card_view(q_dict, show_actions=False, key_prefix=f"prev_{idx}")
+                    with st.expander(f"🔍 Inspect Extracted Question Cards (Paginated)", expanded=False):
+                        p_size = 10
+                        p_tot = max(1, (len(unique_qs) + p_size - 1) // p_size)
+                        p_col1, p_col2 = st.columns([1, 3])
+                        p_num = p_col1.number_input(f"Page (1 to {p_tot})", min_value=1, max_value=p_tot, value=1, step=1, key="prev_card_page")
+                        p_start = (p_num - 1) * p_size
+                        for idx, q_dict in enumerate(unique_qs[p_start : p_start + p_size]):
+                            _render_question_card_view(q_dict, show_actions=False, key_prefix=f"prev_{p_start + idx}")
 
-                # 5. Save or Discard Actions
+                # 5. Save or Discard Actions (Fast Batch Transaction)
                 sv_col1, sv_col2 = st.columns([3, 1])
-                btn_save_text = f"💾 Add {len(unique_qs)} Unique Questions to Mock Database" if unique_qs else "💾 No New Questions to Add (All Duplicate)"
+                btn_save_text = f"💾 Add {len(unique_qs):,} Unique Questions to Mock Database" if unique_qs else "💾 No New Questions to Add (All Duplicate)"
                 if sv_col1.button(btn_save_text, type="primary", use_container_width=True, disabled=len(unique_qs) == 0, key="btn_save_extracted_to_db"):
-                    # Check if user chose to replace/purge existing mock test questions
                     if st.session_state.get("pdf_dup_handling_mode", "").startswith("🔄"):
                         db.delete_mock_test(ext_stats.get("mock_title", ""))
 
-                    saved_count = 0
-                    for q_item in unique_qs:
-                        db.add_question(q_item, skip_if_duplicate=True)
-                        saved_count += 1
+                    with st.spinner(f"Saving {len(unique_qs):,} questions into your Question Bank..."):
+                        saved_count = db.add_questions_batch(unique_qs, skip_if_duplicate=False)
 
                     # Record uploaded file in the registry
                     fname = ext_stats.get("filename", ext_stats.get("mock_title", "mock.pdf"))
@@ -1648,7 +1673,8 @@ def show_question_bank() -> None:
                     if ext_stats.get("job_id"):
                         db.clear_ocr_job(ext_stats["job_id"])
                     st.session_state["extracted_mock_preview"] = None
-                    st.success(f"✨ Successfully added **{saved_count}** unique mock questions! (Prevented {len(duplicate_qs)} duplicates from repeating).")
+                    st.success(f"✨ Successfully added **{saved_count:,}** unique mock questions! (Prevented {len(duplicate_qs)} duplicates from repeating).")
+                    time.sleep(1)
                     st.rerun()
 
                 if sv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_prev"):
@@ -1797,23 +1823,19 @@ def show_question_bank() -> None:
 
             only_pinned = st.checkbox("📌 Show Pinned Questions Only", value=False, key="qb_only_pinned")
 
-            filtered = db.list_questions(exam_filter, subject_filter, topic_filter, source_filter)
-            if edition_filter != "All" and "exam_edition" in filtered.columns:
-                filtered = filtered[filtered["exam_edition"] == edition_filter]
-            if diff_filter != "All" and "difficulty" in filtered.columns:
-                filtered = filtered[filtered["difficulty"] == diff_filter]
+            filtered = db.list_questions(
+                exam=exam_filter,
+                subject=subject_filter,
+                topic=topic_filter,
+                source_type=source_filter,
+                exam_edition=edition_filter,
+                difficulty=diff_filter,
+                keyword=search_query,
+            )
 
             if only_pinned and not filtered.empty:
                 pinned_ids = db.get_pinned_question_ids()
                 filtered = filtered[filtered["id"].astype(int).isin(pinned_ids)]
-
-            if search_query.strip():
-                term = search_query.strip().lower()
-                filtered = filtered[
-                    filtered["question"].str.lower().str.contains(term, na=False)
-                    | filtered["topic"].str.lower().str.contains(term, na=False)
-                    | filtered["explanation"].str.lower().str.contains(term, na=False)
-                ]
 
             act_c1, act_c2 = st.columns([3, 1])
             act_c1.caption(f"Showing **{len(filtered)}** of **{total_vault_count}** total question(s).")

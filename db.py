@@ -2147,11 +2147,34 @@ def add_question(item: Dict[str, Any], skip_if_duplicate: bool = False) -> int:
         return qid
 
 
+def add_questions_batch(items: List[Dict[str, Any]], skip_if_duplicate: bool = False) -> int:
+    """Fast batch insertion for hundreds or thousands of questions in a single SQLite transaction."""
+    if not items:
+        return 0
+    with connect_db() as conn:
+        to_insert = items
+        if skip_if_duplicate:
+            to_insert, _ = filter_duplicate_questions(items, conn=conn)
+        
+        inserted_cnt = 0
+        for item in to_insert:
+            try:
+                insert_question(conn, item)
+                inserted_cnt += 1
+            except Exception:
+                pass
+        conn.commit()
+        return inserted_cnt
+
+
 def list_questions(
     exam: str = "All",
     subject: str = "All",
     topic: str = "All",
     source_type: str = "All",
+    exam_edition: str = "All",
+    difficulty: str = "All",
+    keyword: str = "",
     limit: Optional[int] = None,
     offset: int = 0,
 ) -> pd.DataFrame:
@@ -2170,6 +2193,16 @@ def list_questions(
     if source_type != "All":
         query += " AND source_type = ?"
         params.append(source_type)
+    if exam_edition != "All":
+        query += " AND exam_edition = ?"
+        params.append(exam_edition)
+    if difficulty != "All":
+        query += " AND difficulty = ?"
+        params.append(difficulty)
+    if keyword and keyword.strip():
+        kw = f"%{keyword.strip().lower()}%"
+        query += " AND (LOWER(question) LIKE ? OR LOWER(topic) LIKE ? OR LOWER(explanation) LIKE ?)"
+        params.extend([kw, kw, kw])
     query += " ORDER BY subject, topic, id"
     if limit is not None:
         query += f" LIMIT {int(limit)} OFFSET {int(offset)}"
@@ -2343,6 +2376,8 @@ def list_mock_questions(
     subject: str = "All",
     topic: str = "All",
     mock_name: str = "All",
+    difficulty: str = "All",
+    keyword: str = "",
     limit: Optional[int] = None,
     offset: int = 0,
 ) -> pd.DataFrame:
@@ -2361,6 +2396,13 @@ def list_mock_questions(
     if mock_name != "All":
         query += " AND source_name = ?"
         params.append(mock_name)
+    if difficulty != "All":
+        query += " AND difficulty = ?"
+        params.append(difficulty)
+    if keyword and keyword.strip():
+        kw = f"%{keyword.strip().lower()}%"
+        query += " AND (LOWER(question) LIKE ? OR LOWER(topic) LIKE ? OR LOWER(explanation) LIKE ?)"
+        params.extend([kw, kw, kw])
     query += " ORDER BY subject, topic, id"
     if limit is not None:
         query += f" LIMIT {int(limit)} OFFSET {int(offset)}"
