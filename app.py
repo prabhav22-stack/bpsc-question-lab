@@ -23,6 +23,7 @@ import ai_service
 import analytics
 import config
 import db
+import pdf_extractor
 import revision_engine
 import schemas
 import supabase_client
@@ -446,6 +447,13 @@ def inject_custom_css() -> None:
         box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
     }
 
+    .badge-mock {
+        background-color: rgba(245, 158, 11, 0.14);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        box-shadow: 0 0 10px rgba(245, 158, 11, 0.15);
+    }
+
     .badge-ai {
         background-color: rgba(139, 92, 246, 0.14);
         color: #a78bfa;
@@ -684,6 +692,7 @@ def init_session_state() -> None:
         "tutor_context_question": None,
         "authenticated_user": None,
         "target_exam_name": "71st / 72nd BPSC CCE Prelims",
+        "extracted_mock_preview": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -886,295 +895,706 @@ def show_dashboard() -> None:
 
 
 # -----------------------------------------------------------------------------
-# Views: 2. Question Bank
+# Views: 2. Question Bank & Mock Test Architecture
 # -----------------------------------------------------------------------------
 
-def show_question_bank() -> None:
-    """Browse, filter, search, manually create, import, and export questions."""
-    st.title("📖 Question Bank")
-    st.write("Browse, filter, add custom questions, pin items for revision, or bulk import/export via CSV.")
+def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool = True, key_prefix: str = "qb") -> None:
+    """Helper to render a standardized, elegant question card across all question views."""
+    qid = int(q["id"]) if "id" in q and pd.notna(q["id"]) else 0
+    is_pinned = db.is_question_pinned(qid) if qid > 0 else False
+    stype = str(q.get("source_type", ""))
+    
+    if stype == "Official PYQ":
+        badge = "🏛️ Official Verified PYQ"
+        b_cls = "badge-pyq"
+    elif stype == "Mock question":
+        badge = "📝 Mock Question"
+        b_cls = "badge-mock"
+    elif q.get("is_ai_generated"):
+        badge = "🤖 AI Practice"
+        b_cls = "badge-ai"
+    else:
+        badge = "📌 Practice Sample"
+        b_cls = "badge-sample"
 
-    top_col1, top_col2 = st.columns(2)
+    provenance_line = f"<span class='lab-badge {b_cls}'>{badge}</span> "
+    provenance_line += f"<b>{q.get('subject', 'General')}</b> → <i>{q.get('topic', 'General')}</i> · Difficulty: <b>{q.get('difficulty', 'Medium')}</b>"
+    if q.get("source_name"):
+        provenance_line += f" · <code>{q['source_name']}</code>"
+    elif q.get("exam_edition"):
+        provenance_line += f" · {q['exam_edition']}"
+    if q.get("exam_year") and pd.notna(q.get("exam_year")) and str(q["exam_year"]).strip():
+        try:
+            provenance_line += f" ({int(float(q['exam_year']))})"
+        except Exception:
+            pass
+    if q.get("paper_set"):
+        provenance_line += f" · {q['paper_set']}"
+    if q.get("official_qno") and pd.notna(q.get("official_qno")):
+        try:
+            q_num = int(q["official_qno"])
+            if q_num > 0:
+                provenance_line += f" · Q.{q_num}"
+        except Exception:
+            pass
 
-    # 1. CSV Import Expander
-    with top_col1:
-        with st.expander("📥 Import Questions from CSV", expanded=False):
-            upload = st.file_uploader(
-                "Upload CSV file",
-                type=["csv"],
-                help="Template columns: exam, subject, topic, question, option_a, option_b, option_c, option_d, correct_option",
+    with st.container(border=True):
+        st.markdown(f"#### Question #{qid if qid > 0 else '•'}: {q['question']}")
+        st.markdown(provenance_line, unsafe_allow_html=True)
+        st.write(
+            f"- **A.** {q['option_a']}\n"
+            f"- **B.** {q['option_b']}\n"
+            f"- **C.** {q['option_c']}\n"
+            f"- **D.** {q['option_d']}"
+        )
+        with st.expander("Reveal Correct Option & Explanation", expanded=False):
+            st.info(
+                f"**Correct Option:** `{q['correct_option']}`\n\n"
+                f"**Explanation:** {q.get('explanation', 'No explanation recorded.')}"
             )
-            if upload is not None and st.button("Import Uploaded CSV", type="primary"):
-                inserted, problems = db.import_csv(upload)
-                st.success(f"Successfully imported {inserted} question(s).")
-                for prob in problems[:10]:
-                    st.warning(prob)
-                if len(problems) > 10:
-                    st.caption(f"{len(problems) - 10} additional messages not shown.")
+            if q.get("distractor_notes"):
+                st.caption(f"**Distractor Analysis:** {q['distractor_notes']}")
+
+        if show_actions and qid > 0:
+            b1, b2 = st.columns([1, 1])
+            pin_lbl = "📌 Unpin Question" if is_pinned else "📍 Pin for Revision"
+            if b1.button(pin_lbl, key=f"{key_prefix}_pin_{qid}"):
+                if is_pinned:
+                    db.unpin_question(qid)
+                else:
+                    db.pin_question(qid, note=f"Pinned from Question Bank ({q.get('topic', '')})")
                 st.rerun()
 
-    # 2. Manual Question Creator Expander
-    with top_col2:
-        with st.expander("➕ Add Custom / Official PYQ Question Manually", expanded=False):
-            with st.form("manual_add_question_form", clear_on_submit=True):
-                mc1, mc2, mc3 = st.columns(3)
-                m_exam = mc1.selectbox("Exam", ["BPSC", "UPSC"], index=0)
-                m_subj = mc2.selectbox("Subject", db.SUBJECTS, index=0)
-                m_diff = mc3.selectbox("Difficulty", ["Easy", "Medium", "Hard"], index=1)
+            if config.is_gemini_configured() and b2.button("🎓 Discuss with AI Tutor", key=f"{key_prefix}_tutor_{qid}"):
+                opts_map = {
+                    "A": str(q["option_a"]),
+                    "B": str(q["option_b"]),
+                    "C": str(q["option_c"]),
+                    "D": str(q["option_d"]),
+                }
+                st.session_state["tutor_context_question"] = {
+                    "question_id": qid,
+                    "question": q["question"],
+                    "options": opts_map,
+                    "selected_option": "-",
+                    "selected_text": f"Exploring {stype or 'Question Bank'}",
+                    "correct_option": q["correct_option"],
+                    "correct_text": opts_map.get(q["correct_option"], ""),
+                    "explanation": q.get("explanation", ""),
+                    "subject": q["subject"],
+                    "topic": q["topic"],
+                }
+                navigate_to("AI Study Tutor")
 
-                mc4, mc5, mc6 = st.columns(3)
-                m_topic = mc4.text_input("Topic*", placeholder="e.g. Champaran Satyagraha")
-                m_src = mc5.selectbox("Source Type", ["User-added", "Official PYQ", "Built-in sample"], index=0)
-                m_edition = mc6.text_input("Exam Edition (if PYQ)", placeholder="e.g. 69th BPSC Prelims")
 
-                m_qtext = st.text_area("Question Stem*", placeholder="Enter the full question text...")
-                mo1, mo2 = st.columns(2)
-                m_oa = mo1.text_input("Option A*")
-                m_ob = mo2.text_input("Option B*")
-                m_oc = mo1.text_input("Option C*")
-                m_od = mo2.text_input("Option D*")
+def show_question_bank() -> None:
+    """Browse, filter, search, upload mock PDFs with AI OCR, and manage questions."""
+    st.title("📖 Question Bank & Mock Test Architecture")
+    st.caption("Organized repository for Official PYQs, Extracted Mock Tests, AI Practice Drills, and PDF OCR extractions.")
 
-                mc_cor, mc_year = st.columns([2, 1])
-                m_cor = mc_cor.radio("Correct Option*", ["A", "B", "C", "D"], horizontal=True)
-                m_year = mc_year.number_input("Exam Year (optional)", min_value=1990, max_value=2030, value=2025)
-                m_exp = st.text_area("Detailed Explanation", placeholder="Why is this option correct and why are others wrong?")
-
-                if st.form_submit_button("💾 Save Question to Bank", type="primary"):
-                    if not (m_qtext.strip() and m_oa.strip() and m_ob.strip() and m_oc.strip() and m_od.strip()):
-                        st.error("Please fill in the question stem and all four options (A, B, C, D).")
-                    else:
-                        db.add_question({
-                            "exam": m_exam,
-                            "subject": m_subj,
-                            "topic": m_topic.strip() or "General",
-                            "question": m_qtext.strip(),
-                            "option_a": m_oa.strip(),
-                            "option_b": m_ob.strip(),
-                            "option_c": m_oc.strip(),
-                            "option_d": m_od.strip(),
-                            "correct_option": m_cor,
-                            "explanation": m_exp.strip(),
-                            "source_type": m_src,
-                            "exam_edition": m_edition.strip(),
-                            "exam_year": int(m_year) if m_src == "Official PYQ" else None,
-                            "difficulty": m_diff,
-                            "is_ai_generated": 0,
-                        })
-                        st.success("Question added to your Question Bank!")
-                        st.rerun()
+    tab_mocks, tab_upload_pdf, tab_pyqs, tab_all, tab_add_csv = st.tabs([
+        "📝 Mock Questions Bank",
+        "📄 Upload Mock PDF & OCR Extractor",
+        "🏛️ 10-Year Official PYQ Bank",
+        "🔍 All Questions Vault",
+        "➕ Add Manually & CSV Import",
+    ])
 
     all_questions = db.list_questions()
-    if all_questions.empty:
-        st.info("Your question bank is empty. Add a question or import a CSV.")
-        return
 
-    # 10-Year Official PYQ Vault Summary Box
-    pyq_subset = all_questions[all_questions["source_type"] == "Official PYQ"]
-    with st.expander(f"🏛️ 10-Year BPSC Official PYQ Vault ({len(pyq_subset)} Authentic Questions · 60th to 70th CCE)", expanded=False):
-        st.write("Browse and filter authentic BPSC questions from official examination papers across the last 10 years.")
-        ed_counts = pyq_subset["exam_edition"].value_counts().to_dict()
-        p_row1 = st.columns(5)
-        ed_keys_1 = [
-            ("70th BPSC (2024)", "70th BPSC CCE Prelims"),
-            ("69th BPSC (2023)", "69th BPSC CCE Prelims"),
-            ("68th BPSC (2023)", "68th BPSC CCE Prelims"),
-            ("67th BPSC (2022)", "67th BPSC CCE Re-Exam"),
-            ("66th BPSC (2020)", "66th BPSC CCE Prelims"),
-        ]
-        for idx, (short_l, full_e) in enumerate(ed_keys_1):
-            p_row1[idx].metric(short_l, f"{ed_counts.get(full_e, 0)} Qs")
+    # =========================================================================
+    # Tab 1: Mock Questions Bank (Dedicated Mock Question Section)
+    # =========================================================================
+    with tab_mocks:
+        st.subheader("📝 Mock Questions Bank")
+        st.write("Curated test series questions, coaching institute mock papers, and PDF extractions sorted by syllabus subject.")
 
-        p_row2 = st.columns(4)
-        ed_keys_2 = [
-            ("65th BPSC (2019)", "65th BPSC CCE Prelims"),
-            ("64th BPSC (2018)", "64th BPSC CCE Prelims"),
-            ("63rd BPSC (2018)", "63rd BPSC CCE Prelims"),
-            ("60-62nd BPSC (2017)", "60th-62nd BPSC CCE Prelims"),
-        ]
-        for idx, (short_l, full_e) in enumerate(ed_keys_2):
-            p_row2[idx].metric(short_l, f"{ed_counts.get(full_e, 0)} Qs")
+        mock_df = db.list_mock_questions()
 
-    # Filter Controls
-    c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.2, 1.2, 1.3, 1.1, 0.9, 1.4])
-    exam_filter = c1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
-    subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
-    subject_filter = c2.selectbox("Subject", subjects, key="qb_subj")
-
-    interim = db.list_questions(exam=exam_filter, subject=subject_filter)
-    topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
-    topic_filter = c3.selectbox("Topic", topics, key="qb_top")
-
-    editions_list = ["All"] + sorted([e for e in all_questions["exam_edition"].dropna().unique().tolist() if e.strip()])
-    edition_filter = c4.selectbox("Exam Edition", editions_list, key="qb_ed")
-
-    src_choices = ["All", "Official PYQ", "Built-in sample", "AI-generated", "User-added"]
-    source_filter = c5.selectbox("Provenance", src_choices, key="qb_src")
-    diff_filter = c6.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="qb_diff")
-    search_query = c7.text_input("Search Keyword", placeholder="e.g. Patna, Kunwar Singh...")
-
-    only_pinned = st.checkbox("📌 Show Pinned Questions Only", value=False, key="qb_only_pinned")
-
-    filtered = db.list_questions(exam_filter, subject_filter, topic_filter, source_filter)
-    if edition_filter != "All" and "exam_edition" in filtered.columns:
-        filtered = filtered[filtered["exam_edition"] == edition_filter]
-    if diff_filter != "All" and "difficulty" in filtered.columns:
-        filtered = filtered[filtered["difficulty"] == diff_filter]
-
-    if only_pinned and not filtered.empty:
-        pinned_ids = [int(qid) for qid in filtered["id"].tolist() if db.is_question_pinned(int(qid))]
-        filtered = filtered[filtered["id"].isin(pinned_ids)]
-
-    if search_query.strip():
-        term = search_query.strip().lower()
-        filtered = filtered[
-            filtered["question"].str.lower().str.contains(term, na=False)
-            | filtered["topic"].str.lower().str.contains(term, na=False)
-            | filtered["explanation"].str.lower().str.contains(term, na=False)
-        ]
-
-    # Action bar for filtered results
-    act_c1, act_c2 = st.columns([3, 1])
-    act_c1.caption(f"Showing **{len(filtered)}** of **{len(all_questions)}** total question(s).")
-    if not filtered.empty and act_c2.button("🎯 Practice Filtered Set", use_container_width=True):
-        f_ids = filtered["id"].astype(int).tolist()
-        chosen = random.sample(f_ids, k=min(15, len(f_ids)))
-        st.session_state["active_test"] = {
-            "session_id": str(uuid.uuid4())[:8],
-            "question_ids": chosen,
-            "exam": exam_filter if exam_filter != "All" else "BPSC",
-            "test_mode": "Filtered Question Bank Drill",
-            "ui_style": "Interactive OMR Palette",
-            "instant_feedback": True,
-            "negative_rate": 0.33,
-            "start_time": time.time(),
-            "current_index": 0,
-            "answers": {},
-            "confidences": {},
-            "marked_review": [],
-            "question_times": {},
-            "last_q_timestamp": time.time(),
-        }
-        st.session_state["test_results"] = None
-        navigate_to("Practice & Mock Tests")
-
-    # Display Table with Provenance Columns
-    disp_cols = [
-        "id",
-        "source_type",
-        "exam_edition",
-        "exam_year",
-        "subject",
-        "topic",
-        "question",
-        "correct_option",
-        "difficulty",
-        "answer_key_status",
-    ]
-    available_cols = [c for c in disp_cols if c in filtered.columns]
-    st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
-
-    # Paginated Detailed Provenance Cards
-    with st.expander("🔍 Browse Detailed Question & Provenance Cards (Paginated)", expanded=True):
-        if filtered.empty:
-            st.info("No questions match the current filters.")
-        else:
-            page_size = 10
-            total_pages = max(1, (len(filtered) + page_size - 1) // page_size)
-            p_col1, p_col2 = st.columns([1, 3])
-            page_num = p_col1.number_input(
-                f"Page (1 to {total_pages})", min_value=1, max_value=total_pages, value=1, step=1
+        if mock_df.empty:
+            st.info(
+                "ℹ️ **No mock questions in the database yet.**\n\n"
+                "You can upload OCR text PDFs or scanned image test papers in the **'📄 Upload Mock PDF & OCR Extractor'** "
+                "tab. The AI will extract all questions, answers, and explanations, and automatically sort them into standard subjects!"
             )
-            start_idx = (page_num - 1) * page_size
-            page_slice = filtered.iloc[start_idx : start_idx + page_size]
+        else:
+            # Top KPI metrics for Mock Questions
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Mock Questions", len(mock_df))
+            m2.metric("Mock Test Series", mock_df["source_name"].nunique())
+            m3.metric("Subjects Covered", mock_df["subject"].nunique())
+            diff_counts = mock_df["difficulty"].value_counts().to_dict()
+            m4.metric("Medium / Hard", f"{diff_counts.get('Medium', 0)} / {diff_counts.get('Hard', 0)}")
 
-            for _, q in page_slice.iterrows():
-                qid = int(q["id"])
-                is_pinned = db.is_question_pinned(qid)
-                badge = (
-                    "🏛️ Official Verified PYQ"
-                    if q.get("source_type") == "Official PYQ"
-                    else ("🤖 AI-Generated Practice" if q.get("is_ai_generated") else "📌 Practice Sample")
-                )
-                provenance_line = f"**{badge}** · `{q.get('subject', '')}` → `{q.get('topic', '')}` · Difficulty: **{q.get('difficulty', 'Medium')}**"
-                if q.get("exam_edition"):
-                    provenance_line += f" · {q['exam_edition']}"
-                if q.get("exam_year") and pd.notna(q.get("exam_year")):
-                    provenance_line += f" ({int(q['exam_year'])})"
-                if q.get("paper_set"):
-                    provenance_line += f" · {q['paper_set']}"
-                if q.get("official_qno") and pd.notna(q.get("official_qno")) and int(q["official_qno"]) > 0:
-                    provenance_line += f" · Q.{int(q['official_qno'])}"
+            # Subject Distribution Chips
+            st.markdown("##### 🧭 Subject Breakdown in Mock Database")
+            subj_counts = mock_df["subject"].value_counts()
+            s_cols = st.columns(min(5, len(subj_counts) or 1))
+            for idx, (s_name, s_val) in enumerate(subj_counts.items()):
+                s_cols[idx % len(s_cols)].metric(s_name, f"{s_val} Qs")
 
-                with st.container(border=True):
-                    st.markdown(f"#### Question #{qid}: {q['question']}")
-                    st.caption(provenance_line)
-                    st.write(
-                        f"- **A.** {q['option_a']}\n"
-                        f"- **B.** {q['option_b']}\n"
-                        f"- **C.** {q['option_c']}\n"
-                        f"- **D.** {q['option_d']}"
+            st.divider()
+
+            # Filter Controls for Mock Questions
+            fc1, fc2, fc3, fc4, fc5 = st.columns([1.5, 1.2, 1.2, 1.0, 1.5])
+            mock_names = ["All Mock Tests"] + sorted([m for m in mock_df["source_name"].dropna().unique().tolist() if m.strip()])
+            selected_mock = fc1.selectbox("Mock Test Series", mock_names, key="mock_filter_series")
+
+            mock_subjects = ["All"] + sorted(mock_df["subject"].dropna().unique().tolist())
+            selected_subject = fc2.selectbox("Subject", mock_subjects, key="mock_filter_subject")
+
+            interim_mock = mock_df if selected_subject == "All" else mock_df[mock_df["subject"] == selected_subject]
+            mock_topics = ["All"] + sorted(interim_mock["topic"].dropna().unique().tolist())
+            selected_topic = fc3.selectbox("Topic", mock_topics, key="mock_filter_topic")
+
+            selected_diff = fc4.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="mock_filter_diff")
+            search_mock_kw = fc5.text_input("Search Mock Questions", placeholder="e.g. Fundamental Rights, Bihar...", key="mock_kw")
+
+            # Apply filters
+            filtered_mock = mock_df.copy()
+            if selected_mock != "All Mock Tests":
+                filtered_mock = filtered_mock[filtered_mock["source_name"] == selected_mock]
+            if selected_subject != "All":
+                filtered_mock = filtered_mock[filtered_mock["subject"] == selected_subject]
+            if selected_topic != "All":
+                filtered_mock = filtered_mock[filtered_mock["topic"] == selected_topic]
+            if selected_diff != "All":
+                filtered_mock = filtered_mock[filtered_mock["difficulty"] == selected_diff]
+            if search_mock_kw.strip():
+                kw = search_mock_kw.strip().lower()
+                filtered_mock = filtered_mock[
+                    filtered_mock["question"].str.lower().str.contains(kw, na=False)
+                    | filtered_mock["topic"].str.lower().str.contains(kw, na=False)
+                    | filtered_mock["explanation"].str.lower().str.contains(kw, na=False)
+                ]
+
+            # Action bar: Practice Mock Test
+            act_col1, act_col2 = st.columns([3, 1])
+            act_col1.caption(f"Showing **{len(filtered_mock)}** of **{len(mock_df)}** mock question(s).")
+            if not filtered_mock.empty and act_col2.button("🎯 Practice Filtered Mock Set", type="primary", use_container_width=True, key="btn_mock_practice"):
+                f_ids = filtered_mock["id"].astype(int).tolist()
+                chosen = random.sample(f_ids, k=min(25, len(f_ids)))
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": chosen,
+                    "exam": "BPSC",
+                    "test_mode": f"Mock Test Drill ({selected_mock if selected_mock != 'All Mock Tests' else 'Mixed Mock'})",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": True,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+            # Data Table
+            disp_mock_cols = ["id", "source_name", "subject", "topic", "question", "correct_option", "difficulty", "answer_key_status"]
+            avail_m_cols = [c for c in disp_mock_cols if c in filtered_mock.columns]
+            st.dataframe(filtered_mock[avail_m_cols], use_container_width=True, hide_index=True)
+
+            # Paginated Cards
+            with st.expander("🔍 Browse Detailed Mock Question Cards (Paginated)", expanded=True):
+                if filtered_mock.empty:
+                    st.info("No mock questions match the selected filters.")
+                else:
+                    m_page_size = 10
+                    m_total_pages = max(1, (len(filtered_mock) + m_page_size - 1) // m_page_size)
+                    mp_col1, mp_col2 = st.columns([1, 3])
+                    m_page_num = mp_col1.number_input(
+                        f"Page (1 to {m_total_pages})", min_value=1, max_value=m_total_pages, value=1, step=1, key="mock_page_ctrl"
                     )
-                    with st.expander("Reveal Correct Option & Explanation", expanded=False):
-                        st.info(
-                            f"**Correct Option:** `{q['correct_option']}`\n\n"
-                            f"**Explanation:** {q.get('explanation', 'No explanation recorded.')}"
-                        )
-                        if q.get("distractor_notes"):
-                            st.caption(f"**Distractor Analysis:** {q['distractor_notes']}")
+                    m_start_idx = (m_page_num - 1) * m_page_size
+                    m_page_slice = filtered_mock.iloc[m_start_idx : m_start_idx + m_page_size]
 
-                    b1, b2 = st.columns([1, 1])
-                    pin_lbl = "📌 Unpin Question" if is_pinned else "📍 Pin for Revision"
-                    if b1.button(pin_lbl, key=f"qb_pin_{qid}"):
-                        if is_pinned:
-                            db.unpin_question(qid)
-                        else:
-                            db.pin_question(qid, note=f"Pinned from Question Bank ({q.get('topic', '')})")
+                    for _, q_row in m_page_slice.iterrows():
+                        _render_question_card_view(q_row, show_actions=True, key_prefix="mock_bank")
+
+            # Manage / Delete Uploaded Mock Series Expander
+            with st.expander("⚙️ Manage & Delete Uploaded Mock Test Batches", expanded=False):
+                st.caption("Safely purge an uploaded mock test paper if you wish to re-upload or clear obsolete tests.")
+                del_names = db.get_mock_test_names()
+                if not del_names:
+                    st.write("No uploaded mock batches available.")
+                else:
+                    del_col1, del_col2 = st.columns([3, 1])
+                    to_delete = del_col1.selectbox("Select Mock Test to Delete", del_names, key="sel_del_mock")
+                    if del_col2.button("🗑️ Delete Mock Test", type="secondary", key="btn_del_mock"):
+                        deleted_cnt = db.delete_mock_test(to_delete)
+                        st.success(f"Deleted {deleted_cnt} question(s) associated with '{to_delete}'.")
                         st.rerun()
 
-                    if config.is_gemini_configured() and b2.button("🎓 Discuss with AI Tutor", key=f"qb_tutor_{qid}"):
-                        opts_map = {
-                            "A": str(q["option_a"]),
-                            "B": str(q["option_b"]),
-                            "C": str(q["option_c"]),
-                            "D": str(q["option_d"]),
-                        }
-                        st.session_state["tutor_context_question"] = {
-                            "question_id": qid,
-                            "question": q["question"],
-                            "options": opts_map,
-                            "selected_option": "-",
-                            "selected_text": "Exploring from Question Bank",
-                            "correct_option": q["correct_option"],
-                            "correct_text": opts_map.get(q["correct_option"], ""),
-                            "explanation": q.get("explanation", ""),
-                            "subject": q["subject"],
-                            "topic": q["topic"],
-                        }
-                        navigate_to("AI Study Tutor")
-
-    # Export Buttons
-    st.divider()
-    col_exp1, col_exp2 = st.columns(2)
-    with col_exp1:
-        csv_bytes = all_questions.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Export Full Question Bank to CSV",
-            data=csv_bytes,
-            file_name="bpsc_question_bank_export.csv",
-            mime="text/csv",
-            use_container_width=True,
+    # =========================================================================
+    # Tab 2: Upload Mock PDF & OCR Extractor (OCR & Scanned PDF Pipeline)
+    # =========================================================================
+    with tab_upload_pdf:
+        st.subheader("📄 Upload Mock PDF & Automated OCR Extractor")
+        st.write(
+            "Upload any mock examination paper PDF (both digital OCR text PDFs and scanned image PDFs are supported). "
+            "Antigravity AI extracts all multiple-choice questions, identifies options & answer keys, and **automatically sorts each question into its relevant syllabus subject**."
         )
-    with col_exp2:
-        attempts = db.get_attempts()
-        if not attempts.empty:
-            att_csv = attempts.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "⬇️ Export Attempt History to CSV",
-                data=att_csv,
-                file_name="bpsc_attempts_export.csv",
-                mime="text/csv",
-                use_container_width=True,
+
+        st.markdown(
+            """
+            <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                <span style="font-size: 1.1rem; margin-right: 6px;">⚡</span>
+                <b>No File Size Limit:</b> Configured for high-capacity multi-page PDF processing (up to 2GB) with intelligent streaming chunks.
+                Both clean OCR PDFs and scanned paper tests are natively parsed via Gemini Multimodal Vision.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        up_col1, up_col2 = st.columns([3, 2])
+
+        with up_col1:
+            uploaded_pdf = st.file_uploader(
+                "Upload Mock Test PDF (OCR or Scanned)",
+                type=["pdf"],
+                key="mock_pdf_uploader",
+                help="Supports multi-page OCR text PDFs and scanned image PDFs. No practical file size limit (up to 2GB).",
             )
+            suggested_title = ""
+            if uploaded_pdf is not None:
+                suggested_title = Path(uploaded_pdf.name).stem.replace("_", " ").title()
+            mock_test_title = st.text_input(
+                "Mock Test Title / Institute Name*",
+                value=suggested_title or "Drishti IAS BPSC Prelims Mock 01",
+                placeholder="e.g. Drishti IAS BPSC Prelims Mock 01",
+                help="This title will be tagged as the source of all extracted questions.",
+            )
+
+        with up_col2:
+            target_exam_pdf = st.selectbox("Target Exam Syllabus", ["BPSC", "UPSC", "Both"], index=0, key="pdf_target_exam")
+            page_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pdf_scope")
+            p_start, p_end = None, None
+            if page_scope == "Custom Page Range":
+                pr_c1, pr_c2 = st.columns(2)
+                p_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pdf_p_start")
+                p_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pdf_p_end")
+
+            chunk_batch_size = st.slider(
+                "Batch Size (Pages per AI Chunk)",
+                min_value=2,
+                max_value=6,
+                value=4,
+                help="Smaller chunk sizes (3-5 pages) avoid AI token truncation and allow smooth real-time progress updates.",
+            )
+
+        extract_clicked = st.button(
+            "🚀 Extract, OCR & Sort Mock Questions",
+            type="primary",
+            use_container_width=True,
+            disabled=uploaded_pdf is None,
+            key="btn_run_pdf_extraction",
+        )
+
+        if extract_clicked and uploaded_pdf is not None:
+            if not config.is_gemini_configured():
+                st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & subject classification.")
+            else:
+                prog_bar = st.progress(0.0)
+                status_txt = st.empty()
+
+                def _progress_cb(pct: float, msg: str) -> None:
+                    prog_bar.progress(min(1.0, max(0.0, pct)))
+                    status_txt.info(f"⏳ {msg}")
+
+                try:
+                    with st.spinner("Analyzing PDF pages and running multimodal question extraction..."):
+                        pdf_bytes = uploaded_pdf.getvalue()
+                        extracted_qs, stats = pdf_extractor.extract_mock_questions_from_pdf(
+                            pdf_bytes=pdf_bytes,
+                            mock_title=mock_test_title.strip() or "Uploaded Mock Test",
+                            target_exam=target_exam_pdf,
+                            page_start=p_start,
+                            page_end=p_end,
+                            chunk_size=chunk_batch_size,
+                            progress_callback=_progress_cb,
+                        )
+
+                    prog_bar.progress(1.0)
+                    status_txt.success(f"✅ Extraction completed! Found {len(extracted_qs)} multiple-choice questions.")
+                    st.session_state["extracted_mock_preview"] = {
+                        "questions": extracted_qs,
+                        "stats": stats,
+                    }
+                    st.rerun()
+
+                except Exception as exc:
+                    status_txt.error(f"❌ PDF Extraction error: {exc}")
+
+        # Render Extracted Preview & Database Save Action
+        if st.session_state.get("extracted_mock_preview") is not None:
+            prev_info = st.session_state["extracted_mock_preview"]
+            ext_questions = prev_info.get("questions", [])
+            ext_stats = prev_info.get("stats", {})
+
+            st.markdown("---")
+            st.subheader(f"📊 Extraction Preview: {ext_stats.get('mock_title', 'Mock Test')}")
+
+            if not ext_questions:
+                st.warning("No multiple-choice questions were found in the selected pages of this document. Check the page range or ensure the pages contain questions.")
+                if st.button("Clear Preview", key="btn_clear_empty_prev"):
+                    st.session_state["extracted_mock_preview"] = None
+                    st.rerun()
+            else:
+                st.success(
+                    f"🎉 Successfully extracted **{len(ext_questions)}** questions from **{ext_stats.get('pages_processed', 0)}** pages "
+                    f"via **{ext_stats.get('mode', 'OCR')}**!"
+                )
+
+                # Subject Sorting Distribution Grid
+                st.markdown("#### 🧭 Automatic Subject Distribution")
+                st.caption("Each extracted question has been categorized into its relevant BPSC/UPSC syllabus subject:")
+
+                s_dist = ext_stats.get("subject_counts", {})
+                if s_dist:
+                    dist_cols = st.columns(min(5, len(s_dist)))
+                    for d_idx, (s_name, s_count) in enumerate(s_dist.items()):
+                        dist_cols[d_idx % len(dist_cols)].metric(s_name, f"{s_count} Qs")
+
+                # Preview Data Table
+                prev_df = pd.DataFrame(ext_questions)
+                cols_to_preview = ["subject", "topic", "question", "correct_option", "difficulty", "explanation"]
+                avail_prev_cols = [c for c in cols_to_preview if c in prev_df.columns]
+                st.dataframe(prev_df[avail_prev_cols], use_container_width=True, hide_index=True)
+
+                # Inspect Cards Expander
+                with st.expander(f"🔍 Inspect All {len(ext_questions)} Extracted Question Cards", expanded=False):
+                    for idx, q_dict in enumerate(ext_questions):
+                        _render_question_card_view(q_dict, show_actions=False, key_prefix=f"prev_{idx}")
+
+                # Save or Discard Buttons
+                sv_col1, sv_col2 = st.columns([3, 1])
+                if sv_col1.button(f"💾 Add All {len(ext_questions)} Questions to Mock Question Database", type="primary", use_container_width=True, key="btn_save_extracted_to_db"):
+                    saved_count = 0
+                    for q_item in ext_questions:
+                        db.add_question(q_item)
+                        saved_count += 1
+                    st.session_state["extracted_mock_preview"] = None
+                    st.success(f"✨ Successfully added {saved_count} mock questions to your database! They are now visible in the 'Mock Questions Bank' tab.")
+                    st.rerun()
+
+                if sv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_prev"):
+                    st.session_state["extracted_mock_preview"] = None
+                    st.rerun()
+
+    # =========================================================================
+    # Tab 3: 10-Year Official PYQ Bank
+    # =========================================================================
+    with tab_pyqs:
+        pyq_subset = all_questions[all_questions["source_type"] == "Official PYQ"] if not all_questions.empty else pd.DataFrame()
+        st.subheader(f"🏛️ 10-Year BPSC Official PYQ Vault ({len(pyq_subset)} Authentic Questions · 60th to 70th CCE)")
+        st.write("Browse and filter authentic BPSC questions from official examination papers across the last 10 years.")
+
+        if not pyq_subset.empty:
+            ed_counts = pyq_subset["exam_edition"].value_counts().to_dict()
+            p_row1 = st.columns(5)
+            ed_keys_1 = [
+                ("70th BPSC (2024)", "70th BPSC CCE Prelims"),
+                ("69th BPSC (2023)", "69th BPSC CCE Prelims"),
+                ("68th BPSC (2023)", "68th BPSC CCE Prelims"),
+                ("67th BPSC (2022)", "67th BPSC CCE Re-Exam"),
+                ("66th BPSC (2020)", "66th BPSC CCE Prelims"),
+            ]
+            for idx, (short_l, full_e) in enumerate(ed_keys_1):
+                p_row1[idx].metric(short_l, f"{ed_counts.get(full_e, 0)} Qs")
+
+            p_row2 = st.columns(4)
+            ed_keys_2 = [
+                ("65th BPSC (2019)", "65th BPSC CCE Prelims"),
+                ("64th BPSC (2018)", "64th BPSC CCE Prelims"),
+                ("63rd BPSC (2018)", "63rd BPSC CCE Prelims"),
+                ("60-62nd BPSC (2017)", "60th-62nd BPSC CCE Prelims"),
+            ]
+            for idx, (short_l, full_e) in enumerate(ed_keys_2):
+                p_row2[idx].metric(short_l, f"{ed_counts.get(full_e, 0)} Qs")
+
+            st.divider()
+
+            # PYQ Specific Filters
+            pyq_c1, pyq_c2, pyq_c3, pyq_c4 = st.columns([1.5, 1.2, 1.2, 1.5])
+            pyq_editions = ["All 10-Year Editions"] + sorted([e for e in pyq_subset["exam_edition"].dropna().unique().tolist() if e.strip()])
+            sel_pyq_ed = pyq_c1.selectbox("Exam Edition", pyq_editions, key="pyq_tab_ed")
+
+            pyq_subjs = ["All"] + sorted(pyq_subset["subject"].dropna().unique().tolist())
+            sel_pyq_subj = pyq_c2.selectbox("Subject", pyq_subjs, key="pyq_tab_subj")
+
+            interim_pyq = pyq_subset if sel_pyq_subj == "All" else pyq_subset[pyq_subset["subject"] == sel_pyq_subj]
+            pyq_topics = ["All"] + sorted(interim_pyq["topic"].dropna().unique().tolist())
+            sel_pyq_topic = pyq_c3.selectbox("Topic", pyq_topics, key="pyq_tab_top")
+
+            pyq_kw = pyq_c4.text_input("Search PYQs", placeholder="e.g. Kunwar Singh, Champaran...", key="pyq_tab_kw")
+
+            f_pyq = pyq_subset.copy()
+            if sel_pyq_ed != "All 10-Year Editions":
+                f_pyq = f_pyq[f_pyq["exam_edition"] == sel_pyq_ed]
+            if sel_pyq_subj != "All":
+                f_pyq = f_pyq[f_pyq["subject"] == sel_pyq_subj]
+            if sel_pyq_topic != "All":
+                f_pyq = f_pyq[f_pyq["topic"] == sel_pyq_topic]
+            if pyq_kw.strip():
+                kw_p = pyq_kw.strip().lower()
+                f_pyq = f_pyq[
+                    f_pyq["question"].str.lower().str.contains(kw_p, na=False)
+                    | f_pyq["topic"].str.lower().str.contains(kw_p, na=False)
+                    | f_pyq["explanation"].str.lower().str.contains(kw_p, na=False)
+                ]
+
+            p_act1, p_act2 = st.columns([3, 1])
+            p_act1.caption(f"Showing **{len(f_pyq)}** authentic PYQs.")
+            if not f_pyq.empty and p_act2.button("🎯 Practice Filtered PYQs", type="primary", use_container_width=True, key="btn_pyq_drill"):
+                p_ids = f_pyq["id"].astype(int).tolist()
+                chosen_p = random.sample(p_ids, k=min(25, len(p_ids)))
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": chosen_p,
+                    "exam": "BPSC",
+                    "test_mode": f"Official PYQ Drill ({sel_pyq_ed if sel_pyq_ed != 'All 10-Year Editions' else '10-Year Multi-Edition'})",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": True,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+            # PYQ table & cards
+            disp_pyq_cols = ["id", "exam_edition", "exam_year", "paper_set", "official_qno", "subject", "topic", "question", "correct_option", "answer_key_status"]
+            avail_pyq_cols = [c for c in disp_pyq_cols if c in f_pyq.columns]
+            st.dataframe(f_pyq[avail_pyq_cols], use_container_width=True, hide_index=True)
+
+            with st.expander("🔍 Browse Official PYQ Cards (Paginated)", expanded=True):
+                if f_pyq.empty:
+                    st.info("No PYQs match the current filters.")
+                else:
+                    pyq_page_size = 10
+                    pyq_total_pages = max(1, (len(f_pyq) + pyq_page_size - 1) // pyq_page_size)
+                    pyqp_col1, _ = st.columns([1, 3])
+                    pyq_page_num = pyqp_col1.number_input(
+                        f"Page (1 to {pyq_total_pages})", min_value=1, max_value=pyq_total_pages, value=1, step=1, key="pyq_page_ctrl"
+                    )
+                    pyq_start_idx = (pyq_page_num - 1) * pyq_page_size
+                    pyq_slice = f_pyq.iloc[pyq_start_idx : pyq_start_idx + pyq_page_size]
+
+                    for _, q_row in pyq_slice.iterrows():
+                        _render_question_card_view(q_row, show_actions=True, key_prefix="pyq_bank")
+        else:
+            st.info("No Official PYQs loaded in database.")
+
+    # =========================================================================
+    # Tab 4: All Questions Vault (Unified Browser)
+    # =========================================================================
+    with tab_all:
+        st.subheader("🔍 All Questions Vault")
+        st.write("Unified cross-category browser covering Official PYQs, Mock Questions, AI Drills, and Practice Sets.")
+
+        if all_questions.empty:
+            st.info("Your question bank is empty. Add a question or import a CSV.")
+        else:
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.2, 1.2, 1.3, 1.1, 0.9, 1.4])
+            exam_filter = c1.selectbox("Exam", ["All", "BPSC", "UPSC"], key="qb_exam")
+            subjects = ["All"] + sorted(all_questions["subject"].dropna().unique().tolist())
+            subject_filter = c2.selectbox("Subject", subjects, key="qb_subj")
+
+            interim = db.list_questions(exam=exam_filter, subject=subject_filter)
+            topics = ["All"] + sorted(interim["topic"].dropna().unique().tolist())
+            topic_filter = c3.selectbox("Topic", topics, key="qb_top")
+
+            editions_list = ["All"] + sorted([e for e in all_questions["exam_edition"].dropna().unique().tolist() if e.strip()])
+            edition_filter = c4.selectbox("Exam Edition", editions_list, key="qb_ed")
+
+            src_choices = ["All", "Official PYQ", "Mock question", "Built-in sample", "AI-generated", "User-added"]
+            source_filter = c5.selectbox("Provenance", src_choices, key="qb_src")
+            diff_filter = c6.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="qb_diff")
+            search_query = c7.text_input("Search Keyword", placeholder="e.g. Patna, Kunwar Singh...", key="all_kw")
+
+            only_pinned = st.checkbox("📌 Show Pinned Questions Only", value=False, key="qb_only_pinned")
+
+            filtered = db.list_questions(exam_filter, subject_filter, topic_filter, source_filter)
+            if edition_filter != "All" and "exam_edition" in filtered.columns:
+                filtered = filtered[filtered["exam_edition"] == edition_filter]
+            if diff_filter != "All" and "difficulty" in filtered.columns:
+                filtered = filtered[filtered["difficulty"] == diff_filter]
+
+            if only_pinned and not filtered.empty:
+                pinned_ids = [int(qid) for qid in filtered["id"].tolist() if db.is_question_pinned(int(qid))]
+                filtered = filtered[filtered["id"].isin(pinned_ids)]
+
+            if search_query.strip():
+                term = search_query.strip().lower()
+                filtered = filtered[
+                    filtered["question"].str.lower().str.contains(term, na=False)
+                    | filtered["topic"].str.lower().str.contains(term, na=False)
+                    | filtered["explanation"].str.lower().str.contains(term, na=False)
+                ]
+
+            act_c1, act_c2 = st.columns([3, 1])
+            act_c1.caption(f"Showing **{len(filtered)}** of **{len(all_questions)}** total question(s).")
+            if not filtered.empty and act_c2.button("🎯 Practice Filtered Set", use_container_width=True, key="btn_all_practice"):
+                f_ids = filtered["id"].astype(int).tolist()
+                chosen = random.sample(f_ids, k=min(15, len(f_ids)))
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": chosen,
+                    "exam": exam_filter if exam_filter != "All" else "BPSC",
+                    "test_mode": "Filtered Question Bank Drill",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": True,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+            disp_cols = [
+                "id",
+                "source_type",
+                "source_name",
+                "exam_edition",
+                "exam_year",
+                "subject",
+                "topic",
+                "question",
+                "correct_option",
+                "difficulty",
+                "answer_key_status",
+            ]
+            available_cols = [c for c in disp_cols if c in filtered.columns]
+            st.dataframe(filtered[available_cols], use_container_width=True, hide_index=True)
+
+            with st.expander("🔍 Browse Detailed Question Cards (Paginated)", expanded=True):
+                if filtered.empty:
+                    st.info("No questions match the current filters.")
+                else:
+                    page_size = 10
+                    total_pages = max(1, (len(filtered) + page_size - 1) // page_size)
+                    p_col1, p_col2 = st.columns([1, 3])
+                    page_num = p_col1.number_input(
+                        f"Page (1 to {total_pages})", min_value=1, max_value=total_pages, value=1, step=1, key="all_page_ctrl"
+                    )
+                    start_idx = (page_num - 1) * page_size
+                    page_slice = filtered.iloc[start_idx : start_idx + page_size]
+
+                    for _, q_row in page_slice.iterrows():
+                        _render_question_card_view(q_row, show_actions=True, key_prefix="all_bank")
+
+            st.divider()
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                csv_bytes = all_questions.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇️ Export Full Question Bank to CSV",
+                    data=csv_bytes,
+                    file_name="bpsc_question_bank_export.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with col_exp2:
+                attempts = db.get_attempts()
+                if not attempts.empty:
+                    att_csv = attempts.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "⬇️ Export Attempt History to CSV",
+                        data=att_csv,
+                        file_name="bpsc_attempts_export.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+
+    # =========================================================================
+    # Tab 5: Add Manually & CSV Import
+    # =========================================================================
+    with tab_add_csv:
+        st.subheader("➕ Add Questions Manually or Bulk Import CSV")
+        top_col1, top_col2 = st.columns(2)
+
+        with top_col1:
+            with st.container(border=True):
+                st.markdown("#### 📥 Import Questions from CSV")
+                upload = st.file_uploader(
+                    "Upload CSV file",
+                    type=["csv"],
+                    help="Template columns: exam, subject, topic, question, option_a, option_b, option_c, option_d, correct_option",
+                    key="tab_csv_uploader",
+                )
+                if upload is not None and st.button("Import Uploaded CSV", type="primary", key="btn_import_csv"):
+                    inserted, problems = db.import_csv(upload)
+                    st.success(f"Successfully imported {inserted} question(s).")
+                    for prob in problems[:10]:
+                        st.warning(prob)
+                    if len(problems) > 10:
+                        st.caption(f"{len(problems) - 10} additional messages not shown.")
+                    st.rerun()
+
+        with top_col2:
+            with st.container(border=True):
+                st.markdown("#### ➕ Add Custom Question Manually")
+                with st.form("manual_add_question_form", clear_on_submit=True):
+                    mc1, mc2, mc3 = st.columns(3)
+                    m_exam = mc1.selectbox("Exam", ["BPSC", "UPSC"], index=0)
+                    m_subj = mc2.selectbox("Subject", db.SUBJECTS, index=0)
+                    m_diff = mc3.selectbox("Difficulty", ["Easy", "Medium", "Hard"], index=1)
+
+                    mc4, mc5, mc6 = st.columns(3)
+                    m_topic = mc4.text_input("Topic*", placeholder="e.g. Champaran Satyagraha")
+                    m_src = mc5.selectbox("Source Type", ["User-added", "Official PYQ", "Mock question", "Built-in sample"], index=0)
+                    m_edition = mc6.text_input("Exam Edition / Source Title", placeholder="e.g. 69th BPSC Prelims")
+
+                    m_qtext = st.text_area("Question Stem*", placeholder="Enter the full question text...")
+                    mo1, mo2 = st.columns(2)
+                    m_oa = mo1.text_input("Option A*")
+                    m_ob = mo2.text_input("Option B*")
+                    m_oc = mo1.text_input("Option C*")
+                    m_od = mo2.text_input("Option D*")
+
+                    mc_cor, mc_year = st.columns([2, 1])
+                    m_cor = mc_cor.radio("Correct Option*", ["A", "B", "C", "D"], horizontal=True)
+                    m_year = mc_year.number_input("Exam Year (optional)", min_value=1990, max_value=2030, value=2025)
+                    m_exp = st.text_area("Detailed Explanation", placeholder="Why is this option correct and why are others wrong?")
+
+                    if st.form_submit_button("💾 Save Question to Bank", type="primary"):
+                        if not (m_qtext.strip() and m_oa.strip() and m_ob.strip() and m_oc.strip() and m_od.strip()):
+                            st.error("Please fill in the question stem and all four options (A, B, C, D).")
+                        else:
+                            db.add_question({
+                                "exam": m_exam,
+                                "subject": m_subj,
+                                "topic": m_topic.strip() or "General",
+                                "question": m_qtext.strip(),
+                                "option_a": m_oa.strip(),
+                                "option_b": m_ob.strip(),
+                                "option_c": m_oc.strip(),
+                                "option_d": m_od.strip(),
+                                "correct_option": m_cor,
+                                "explanation": m_exp.strip(),
+                                "source_type": m_src,
+                                "source_name": m_edition.strip(),
+                                "exam_edition": m_edition.strip(),
+                                "exam_year": int(m_year) if m_src == "Official PYQ" else None,
+                                "difficulty": m_diff,
+                                "is_ai_generated": 0,
+                            })
+                            st.success("Question added to your Question Bank!")
+                            st.rerun()
 
 
 # -----------------------------------------------------------------------------
@@ -1890,8 +2310,15 @@ def show_practice() -> None:
 
             with col_q:
                 with st.container(border=True):
-                    q_badge_cls = "badge-pyq" if row.get("source_type") == "Official PYQ" else "badge-ai"
-                    q_badge_text = "🏛️ Official PYQ" if row.get("source_type") == "Official PYQ" else "🤖 Practice MCQ"
+                    if row.get("source_type") == "Official PYQ":
+                        q_badge_cls = "badge-pyq"
+                        q_badge_text = "🏛️ Official PYQ"
+                    elif row.get("source_type") == "Mock question":
+                        q_badge_cls = "badge-mock"
+                        q_badge_text = "📝 Mock Question"
+                    else:
+                        q_badge_cls = "badge-ai"
+                        q_badge_text = "🤖 Practice MCQ"
                     diff_val = row.get("difficulty", "Medium")
                     diff_cls = f"badge-difficulty-{diff_val.lower()}"
 
@@ -2114,6 +2541,7 @@ def show_practice() -> None:
         src_types = [
             "All Questions",
             "Official PYQs Only",
+            "Mock Questions Only",
             "AI Practice Sets",
             "Starter Samples",
             "Pinned Questions Only",
@@ -2123,6 +2551,7 @@ def show_practice() -> None:
         src_map = {
             "All Questions": "All",
             "Official PYQs Only": "Official PYQ",
+            "Mock Questions Only": "Mock question",
             "AI Practice Sets": "AI-generated",
             "Starter Samples": "Built-in sample",
             "Pinned Questions Only": "All",
@@ -2138,6 +2567,15 @@ def show_practice() -> None:
                 chosen_ed = st.selectbox("Filter Specific BPSC Exam Edition (Optional)", ed_opts, key="p_ed_sub")
                 if chosen_ed != "All 10-Year Editions":
                     matching_ids = q_df_sub[q_df_sub["exam_edition"] == chosen_ed]["id"].astype(int).tolist()
+
+        if src_choice == "Mock Questions Only" and matching_ids:
+            q_df_sub = db.get_questions_by_ids(matching_ids)
+            if not q_df_sub.empty and "source_name" in q_df_sub.columns:
+                mock_opts = ["All Mock Tests"] + sorted([m for m in q_df_sub["source_name"].dropna().unique().tolist() if m.strip()])
+                if len(mock_opts) > 2:
+                    chosen_mock = st.selectbox("Filter Specific Mock Test (Optional)", mock_opts, key="p_mock_sub")
+                    if chosen_mock != "All Mock Tests":
+                        matching_ids = q_df_sub[q_df_sub["source_name"] == chosen_mock]["id"].astype(int).tolist()
 
         if not matching_ids:
             st.warning("No questions match these filters. Adjust filters or generate new questions in AI Studio.")

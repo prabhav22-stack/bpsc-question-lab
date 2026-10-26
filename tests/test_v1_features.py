@@ -491,5 +491,162 @@ class TestDatabaseV1Features(unittest.TestCase):
             self.assertTrue(ex["exam_edition"].startswith("6") or "BPSC" in ex["exam_edition"])
 
 
+class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
+    """Test suite for Mock Questions database features and PDF OCR extraction pipeline."""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("""
+            CREATE TABLE questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                exam TEXT NOT NULL DEFAULT 'BPSC',
+                subject TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT 'General',
+                question TEXT NOT NULL,
+                option_a TEXT NOT NULL,
+                option_b TEXT NOT NULL,
+                option_c TEXT NOT NULL,
+                option_d TEXT NOT NULL,
+                correct_option TEXT NOT NULL,
+                explanation TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL DEFAULT 'User-added',
+                source_name TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                difficulty TEXT NOT NULL DEFAULT 'Medium',
+                created_at TEXT NOT NULL,
+                subtopic TEXT NOT NULL DEFAULT '',
+                is_ai_generated INTEGER NOT NULL DEFAULT 0,
+                distractor_notes TEXT NOT NULL DEFAULT '',
+                concept_tested TEXT NOT NULL DEFAULT '',
+                question_type TEXT NOT NULL DEFAULT 'Standard MCQ',
+                exam_edition TEXT NOT NULL DEFAULT '',
+                exam_year TEXT NOT NULL DEFAULT '',
+                paper_set TEXT NOT NULL DEFAULT '',
+                official_qno INTEGER NOT NULL DEFAULT 0,
+                answer_key_status TEXT NOT NULL DEFAULT 'Unverified'
+            )
+        """)
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_extracted_mock_question_schema_normalization(self):
+        """Test subject normalization and option cleaning in ExtractedMockQuestion."""
+        q = schemas.ExtractedMockQuestion(
+            question="Which river is known as the Sorrow of Bihar?",
+            option_a="Ganga",
+            option_b="Kosi",
+            option_c="Son",
+            option_d="Gandak",
+            correct_option="B",
+            explanation="The Kosi River causes frequent flooding in North Bihar.",
+            subject="bihar special",  # lowercase should normalize
+            topic="River Systems",
+        )
+        self.assertEqual(q.subject, "Bihar Special")
+        self.assertEqual(q.correct_option, "B")
+
+        # Test polity normalization
+        q_pol = schemas.ExtractedMockQuestion(
+            question="Which Article deals with Financial Emergency?",
+            option_a="Article 352",
+            option_b="Article 356",
+            option_c="Article 360",
+            option_d="Article 368",
+            correct_option="C",
+            explanation="Article 360 empowers the President to proclaim Financial Emergency.",
+            subject="polity",
+            topic="Emergency Provisions",
+        )
+        self.assertEqual(q_pol.subject, "Indian Polity")
+
+    def test_extracted_mock_question_set(self):
+        """Test ExtractedMockQuestionSet with multiple items."""
+        q_set = schemas.ExtractedMockQuestionSet(
+            questions=[
+                schemas.ExtractedMockQuestion(
+                    question="Test Q1",
+                    option_a="A1",
+                    option_b="B1",
+                    option_c="C1",
+                    option_d="D1",
+                    correct_option="A",
+                    subject="Modern History",
+                ),
+                schemas.ExtractedMockQuestion(
+                    question="Test Q2",
+                    option_a="A2",
+                    option_b="B2",
+                    option_c="C2",
+                    option_d="D2",
+                    correct_option="C",
+                    subject="General Science",
+                ),
+            ]
+        )
+        self.assertEqual(len(q_set.questions), 2)
+        self.assertEqual(q_set.questions[0].subject, "Modern History")
+        self.assertEqual(q_set.questions[1].subject, "General Science")
+
+    def test_mock_questions_db_operations(self):
+        """Test inserting mock questions and listing via db.list_mock_questions."""
+        item = {
+            "exam": "BPSC",
+            "subject": "Modern History",
+            "topic": "1857 Revolt",
+            "question": "Who led the 1857 uprising in Rohilkhand?",
+            "option_a": "Khan Bahadur Khan",
+            "option_b": "Kunwar Singh",
+            "option_c": "Nana Saheb",
+            "option_d": "Begum Hazrat Mahal",
+            "correct_option": "A",
+            "explanation": "Khan Bahadur Khan led the rebellion in Bareilly/Rohilkhand.",
+            "source_type": "Mock question",
+            "source_name": "Test Series Mock 1",
+            "exam_edition": "Test Series Mock 1 (Mock PDF)",
+            "difficulty": "Medium",
+        }
+        qid = db.insert_question(self.conn, item)
+        self.conn.commit()
+
+        # Query using connection
+        row = self.conn.execute("SELECT * FROM questions WHERE id = ?", (qid,)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["source_type"], "Mock question")
+        self.assertEqual(row["source_name"], "Test Series Mock 1")
+
+        # Test delete operation
+        self.conn.execute("DELETE FROM questions WHERE source_type = 'Mock question' AND source_name = ?", ("Test Series Mock 1",))
+        self.conn.commit()
+        cnt = self.conn.execute("SELECT COUNT(*) FROM questions WHERE source_type = 'Mock question'").fetchone()[0]
+        self.assertEqual(cnt, 0)
+
+    def test_pdf_extractor_detect_and_slice(self):
+        """Test PDF type detection and slicing with in-memory PDFs."""
+        import io
+        import pypdf
+        import pdf_extractor
+
+        # 1. Blank/scanned PDF (no text)
+        w_blank = pypdf.PdfWriter()
+        w_blank.add_blank_page(width=200, height=200)
+        w_blank.add_blank_page(width=200, height=200)
+        buf_blank = io.BytesIO()
+        w_blank.write(buf_blank)
+        reader_blank = pypdf.PdfReader(io.BytesIO(buf_blank.getvalue()))
+
+        is_scanned, mode_desc, total_pages = pdf_extractor.detect_pdf_type(reader_blank)
+        self.assertTrue(is_scanned)
+        self.assertIn("Scanned Image", mode_desc)
+        self.assertEqual(total_pages, 2)
+
+        # 2. Slicing test
+        sliced_bytes = pdf_extractor.slice_pdf_chunk(reader_blank, 0, 1)
+        sliced_reader = pypdf.PdfReader(io.BytesIO(sliced_bytes))
+        self.assertEqual(len(sliced_reader.pages), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

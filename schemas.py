@@ -134,3 +134,135 @@ class ResearchSummary(BaseModel):
     key_exam_facts: List[str] = Field(default_factory=list, description="High-yield facts for prelims/mains.")
     syllabus_links: List[str] = Field(default_factory=list, description="Matching BPSC/UPSC syllabus topics.")
     bihar_specific_angle: str = Field(default="", description="Bihar-specific relevance, if applicable.")
+
+
+class ExtractedMockQuestion(BaseModel):
+    """Schema for an individual MCQ extracted from an uploaded mock test PDF."""
+
+    question: str = Field(..., description="The complete question stem.")
+    option_a: str = Field(..., description="Text for Option A.")
+    option_b: str = Field(..., description="Text for Option B.")
+    option_c: str = Field(..., description="Text for Option C.")
+    option_d: str = Field(..., description="Text for Option D.")
+    correct_option: Literal["A", "B", "C", "D"] = Field(
+        default="A",
+        description="The correct answer option (A, B, C, or D).",
+    )
+    explanation: str = Field(
+        default="",
+        description="Detailed explanation of the correct answer, or context from the paper.",
+    )
+    distractor_notes: str = Field(
+        default="",
+        description="Analysis of why incorrect options are wrong.",
+    )
+    concept_tested: str = Field(
+        default="",
+        description="Core syllabus concept or factual point tested.",
+    )
+    subject: Literal[
+        "Modern History",
+        "Ancient & Medieval History",
+        "Bihar Special",
+        "Geography",
+        "Indian Polity",
+        "Economy",
+        "General Science",
+        "Environment",
+        "Current Affairs",
+        "Other",
+    ] = Field(
+        default="Other",
+        description="Categorized subject according to BPSC/UPSC syllabus.",
+    )
+    topic: str = Field(default="General", description="Topic within the subject.")
+    difficulty: Literal["Easy", "Medium", "Hard"] = Field(
+        default="Medium", description="Estimated difficulty level."
+    )
+    question_type: str = Field(
+        default="Standard MCQ",
+        description="Question format (Standard MCQ, Statement-based, Assertion-Reason, Matching, etc.).",
+    )
+
+    @field_validator("subject", mode="before")
+    @classmethod
+    def normalize_subject(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            return "Other"
+        v_clean = v.strip()
+        mapping = {
+            "modern history": "Modern History",
+            "history": "Modern History",
+            "ancient history": "Ancient & Medieval History",
+            "medieval history": "Ancient & Medieval History",
+            "ancient & medieval history": "Ancient & Medieval History",
+            "bihar": "Bihar Special",
+            "bihar special": "Bihar Special",
+            "bihar gk": "Bihar Special",
+            "geography": "Geography",
+            "polity": "Indian Polity",
+            "indian polity": "Indian Polity",
+            "constitution": "Indian Polity",
+            "economy": "Economy",
+            "economics": "Economy",
+            "indian economy": "Economy",
+            "science": "General Science",
+            "general science": "General Science",
+            "environment": "Environment",
+            "ecology": "Environment",
+            "current affairs": "Current Affairs",
+            "ca": "Current Affairs",
+        }
+        return mapping.get(
+            v_clean.lower(),
+            v_clean
+            if v_clean
+            in [
+                "Modern History",
+                "Ancient & Medieval History",
+                "Bihar Special",
+                "Geography",
+                "Indian Polity",
+                "Economy",
+                "General Science",
+                "Environment",
+                "Current Affairs",
+                "Other",
+            ]
+            else "Other",
+        )
+
+    @field_validator("correct_option", mode="before")
+    @classmethod
+    def normalize_correct_option(cls, v: Any) -> str:
+        if isinstance(v, str):
+            s = v.strip().upper()
+            if s in ("A", "B", "C", "D"):
+                return s
+            if s.startswith("A"):
+                return "A"
+            if s.startswith("B"):
+                return "B"
+            if s.startswith("C"):
+                return "C"
+            if s.startswith("D"):
+                return "D"
+        return "A"
+
+    @field_validator("question", "option_a", "option_b", "option_c", "option_d", mode="before")
+    @classmethod
+    def clean_text_fields(cls, v: Any) -> str:
+        if v is None:
+            return "(Not available)"
+        s = str(v).strip()
+        return s if s else "(Not available)"
+
+
+class ExtractedMockQuestionSet(BaseModel):
+    """Schema for a collection of questions extracted from a PDF chunk."""
+
+    questions: List[ExtractedMockQuestion] = Field(
+        default_factory=list,
+        description="List of all multiple-choice questions parsed from the PDF pages.",
+    )
+

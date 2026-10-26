@@ -39,6 +39,7 @@ EXAMS = ["BPSC", "UPSC", "Both"]
 DIFFICULTIES = ["Easy", "Medium", "Hard"]
 SOURCE_TYPES = [
     "Official PYQ",
+    "Mock question",
     "Online question",
     "Book / notes",
     "User-added",
@@ -1790,6 +1791,52 @@ def list_questions(exam: str = "All", subject: str = "All", topic: str = "All", 
     query += " ORDER BY subject, topic, id"
     with connect_db() as conn:
         return pd.read_sql_query(query, conn, params=params)
+
+
+def list_mock_questions(
+    exam: str = "All",
+    subject: str = "All",
+    topic: str = "All",
+    mock_name: str = "All",
+) -> pd.DataFrame:
+    """Retrieve filtered mock questions (source_type = 'Mock question')."""
+    query = "SELECT * FROM questions WHERE source_type = 'Mock question'"
+    params: List[Any] = []
+    if exam != "All":
+        query += " AND exam IN (?, 'Both')"
+        params.append(exam)
+    if subject != "All":
+        query += " AND subject = ?"
+        params.append(subject)
+    if topic != "All":
+        query += " AND topic = ?"
+        params.append(topic)
+    if mock_name != "All":
+        query += " AND source_name = ?"
+        params.append(mock_name)
+    query += " ORDER BY subject, topic, id"
+    with connect_db() as conn:
+        return pd.read_sql_query(query, conn, params=params)
+
+
+def get_mock_test_names() -> List[str]:
+    """Return distinct names of uploaded mock tests."""
+    with connect_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT source_name FROM questions WHERE source_type = 'Mock question' AND source_name != '' ORDER BY source_name"
+        ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
+
+def delete_mock_test(source_name: str) -> int:
+    """Delete all mock questions associated with a given mock test name."""
+    with connect_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM questions WHERE source_type = 'Mock question' AND source_name = ?",
+            (source_name,),
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def get_question_ids(exam: str = "All", subject: str = "All", topic: str = "All", source_type: str = "All") -> List[int]:

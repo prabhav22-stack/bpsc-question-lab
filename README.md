@@ -34,7 +34,14 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - Enhanced multi-keyword exemplar retrieval (up to 5 benchmarks) with side-by-side inspection drawers.
    - Interactive preview, distractor notes, and 1-click "Save & Practice This Set Now".
 
-6. **Cloud-First Architecture & Dual Mode:**
+6. **Mock Questions Bank & Multimodal PDF OCR Extractor:**
+   - **Dedicated Mock Questions Bank**: Browse, filter, search, and practice third-party test series questions and mock exams with distinct provenance tracking.
+   - **Automated PDF Question Extraction**: Supports both digital OCR text PDFs and scanned image PDFs using Gemini 2.5 / 1.5 Multimodal Vision and `pypdf`.
+   - **Deterministic Syllabus Subject Sorting**: Automatically sorts extracted questions into the 10 standard syllabus subjects (`Modern History`, `Ancient & Medieval History`, `Bihar Special`, `Geography`, `Indian Polity`, `Economy`, `General Science`, `Environment`, `Current Affairs`, `Other`).
+   - **No Upload File Size Limit**: Configured for high-capacity files up to 2GB with streaming chunk processing.
+   - **Direct Practice Drills**: Launch mock test simulation drills directly from the Mock Questions Bank or practice mode.
+
+7. **Cloud-First Architecture & Dual Mode:**
    - Operates offline in local SQLite (`question_lab.db`).
    - GitHub Actions keep-alive workflow (`.github/workflows/keep_alive.yml`) to keep cloud instances active.
    - Seamlessly connects to Supabase PostgreSQL & Supabase Auth when configured.
@@ -65,7 +72,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 43 tests (19 legacy regression tests + 24 v1.0 feature tests):
+Run all 47 tests (19 legacy regression tests + 24 v1.0 feature tests + 4 mock questions & PDF extractor tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
