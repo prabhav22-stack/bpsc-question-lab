@@ -7,6 +7,7 @@ adaptive spaced repetition, interactive OMR mock engine, and Supabase cloud comp
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -1115,6 +1116,34 @@ def show_question_bank() -> None:
                     for _, q_row in m_page_slice.iterrows():
                         _render_question_card_view(q_row, show_actions=True, key_prefix="mock_bank")
 
+            # Question Bank Deduplication & Integrity Scanner
+            with st.expander("🛡️ Question Bank Deduplication & Integrity Scanner", expanded=False):
+                st.caption("Scan all questions in your database to ensure no question is repeated twice or thrice.")
+                sc_col1, sc_col2 = st.columns([2, 1])
+                if sc_col1.button("🔍 Scan for Duplicate Questions Now", key="btn_scan_dupes_mock"):
+                    st.session_state["dupe_scan_run"] = True
+
+                if st.session_state.get("dupe_scan_run"):
+                    with db.connect_db() as conn:
+                        all_rows = conn.execute("SELECT id, question, subject, topic FROM questions ORDER BY id ASC").fetchall()
+                    seen_dupes: Dict[str, List[int]] = {}
+                    for r in all_rows:
+                        norm = db.normalize_question_text(r["question"])
+                        if norm:
+                            seen_dupes.setdefault(norm, []).append(int(r["id"]))
+                    found_dupes = {k: v for k, v in seen_dupes.items() if len(v) > 1}
+                    total_excess = sum(len(v) - 1 for v in found_dupes.values())
+
+                    if total_excess == 0:
+                        st.success("✅ **Integrity Verified:** Zero duplicate questions detected! Every question in your database is 100% unique.")
+                    else:
+                        st.warning(f"⚠️ Found **{total_excess}** duplicate question occurrence(s) across {len(found_dupes)} unique question stems.")
+                        if sc_col2.button("🧹 Clean All Duplicates (Keep 1 Copy)", type="primary", key="btn_clean_dupes_act"):
+                            removed_cnt, _ = db.find_and_remove_duplicate_questions()
+                            st.success(f"Cleaned {removed_cnt} duplicate question(s) from database!")
+                            st.session_state["dupe_scan_run"] = False
+                            st.rerun()
+
             # Manage / Delete Uploaded Mock Series Expander
             with st.expander("⚙️ Manage & Delete Uploaded Mock Test Batches", expanded=False):
                 st.caption("Safely purge an uploaded mock test paper if you wish to re-upload or clear obsolete tests.")
@@ -1143,14 +1172,18 @@ def show_question_bank() -> None:
             """
             <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
                 <span style="font-size: 1.1rem; margin-right: 6px;">⚡</span>
-                <b>No File Size Limit:</b> Configured for high-capacity multi-page PDF processing (up to 2GB) with intelligent streaming chunks.
-                Both clean OCR PDFs and scanned paper tests are natively parsed via Gemini Multimodal Vision.
+                <b>High-Capacity Intelligent Processing:</b> Supports large multi-page PDF documents (up to 2GB).
+                Both clean OCR PDFs and scanned paper tests are parsed via Gemini Multimodal Vision with strict question deduplication.
             </div>
             """,
             unsafe_allow_html=True,
         )
 
         up_col1, up_col2 = st.columns([3, 2])
+
+        dup_handling_mode = "🛡️ Extract only new unique questions (Skip duplicates)"
+        pdf_file_hash = ""
+        is_already_uploaded = False
 
         with up_col1:
             uploaded_pdf = st.file_uploader(
@@ -1162,6 +1195,28 @@ def show_question_bank() -> None:
             suggested_title = ""
             if uploaded_pdf is not None:
                 suggested_title = Path(uploaded_pdf.name).stem.replace("_", " ").title()
+                pdf_bytes_check = uploaded_pdf.getvalue()
+                pdf_file_hash = hashlib.sha256(pdf_bytes_check).hexdigest()
+                is_already_uploaded, prev_meta = db.is_pdf_already_uploaded(uploaded_pdf.name, pdf_file_hash)
+
+                if is_already_uploaded and prev_meta:
+                    st.warning(
+                        f"⚠️ **Duplicate File Detected:** `'**{uploaded_pdf.name}**'` has already been uploaded previously!\n\n"
+                        f"- **Recorded Mock Title:** `{prev_meta.get('mock_title', uploaded_pdf.name)}`\n"
+                        f"- **Uploaded On:** {prev_meta.get('uploaded_at', 'Previously')}\n"
+                        f"- **Questions in DB:** {prev_meta.get('questions_count', 0)} question(s)\n\n"
+                        "Select how to handle this file to prevent duplicate questions:"
+                    )
+                    dup_handling_mode = st.radio(
+                        "Duplicate File Handling",
+                        [
+                            "🛡️ Extract only new unique questions (Skip questions already in database)",
+                            "🔄 Re-extract & Replace existing test (Purge older questions from this test and refresh)",
+                            "⛔ Cancel processing (Do not extract to avoid duplicate questions)",
+                        ],
+                        key="pdf_dup_handling_mode",
+                    )
+
             mock_test_title = st.text_input(
                 "Mock Test Title / Institute Name*",
                 value=suggested_title or "Drishti IAS BPSC Prelims Mock 01",
@@ -1186,15 +1241,19 @@ def show_question_bank() -> None:
                 help="Smaller chunk sizes (3-5 pages) avoid AI token truncation and allow smooth real-time progress updates.",
             )
 
+        is_cancel_selected = dup_handling_mode.startswith("⛔")
         extract_clicked = st.button(
             "🚀 Extract, OCR & Sort Mock Questions",
             type="primary",
             use_container_width=True,
-            disabled=uploaded_pdf is None,
+            disabled=(uploaded_pdf is None or is_cancel_selected),
             key="btn_run_pdf_extraction",
         )
 
-        if extract_clicked and uploaded_pdf is not None:
+        if is_cancel_selected and uploaded_pdf is not None:
+            st.info("ℹ️ Processing cancelled to prevent duplicate questions. To proceed, select 'Skip questions already in database' or choose another PDF.")
+
+        if extract_clicked and uploaded_pdf is not None and not is_cancel_selected:
             if not config.is_gemini_configured():
                 st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & subject classification.")
             else:
@@ -1206,7 +1265,7 @@ def show_question_bank() -> None:
                     status_txt.info(f"⏳ {msg}")
 
                 try:
-                    with st.spinner("Analyzing PDF pages and running multimodal question extraction..."):
+                    with st.spinner("Analyzing PDF pages and running multimodal question extraction with deduplication..."):
                         pdf_bytes = uploaded_pdf.getvalue()
                         extracted_qs, stats = pdf_extractor.extract_mock_questions_from_pdf(
                             pdf_bytes=pdf_bytes,
@@ -1217,9 +1276,11 @@ def show_question_bank() -> None:
                             chunk_size=chunk_batch_size,
                             progress_callback=_progress_cb,
                         )
+                        stats["filename"] = uploaded_pdf.name
+                        stats["file_bytes_len"] = len(pdf_bytes)
 
                     prog_bar.progress(1.0)
-                    status_txt.success(f"✅ Extraction completed! Found {len(extracted_qs)} multiple-choice questions.")
+                    status_txt.success(f"✅ Extraction completed! Parsed {len(extracted_qs)} question(s).")
                     st.session_state["extracted_mock_preview"] = {
                         "questions": extracted_qs,
                         "stats": stats,
@@ -1229,7 +1290,7 @@ def show_question_bank() -> None:
                 except Exception as exc:
                     status_txt.error(f"❌ PDF Extraction error: {exc}")
 
-        # Render Extracted Preview & Database Save Action
+        # Render Extracted Preview & Database Save Action with Deduplication
         if st.session_state.get("extracted_mock_preview") is not None:
             prev_info = st.session_state["extracted_mock_preview"]
             ext_questions = prev_info.get("questions", [])
@@ -1244,44 +1305,84 @@ def show_question_bank() -> None:
                     st.session_state["extracted_mock_preview"] = None
                     st.rerun()
             else:
-                st.success(
-                    f"🎉 Successfully extracted **{len(ext_questions)}** questions from **{ext_stats.get('pages_processed', 0)}** pages "
-                    f"via **{ext_stats.get('mode', 'OCR')}**!"
-                )
+                # 1. Deduplicate against existing question bank
+                unique_qs, duplicate_qs = db.filter_duplicate_questions(ext_questions)
 
-                # Subject Sorting Distribution Grid
-                st.markdown("#### 🧭 Automatic Subject Distribution")
-                st.caption("Each extracted question has been categorized into its relevant BPSC/UPSC syllabus subject:")
+                # 2. Key Telemetry Metrics
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Total Questions Parsed", len(ext_questions))
+                k2.metric("✨ New Unique Questions", len(unique_qs), help="Questions not currently in your Question Bank")
+                k3.metric("🛡️ Duplicates Filtered", len(duplicate_qs), help="Questions already present in your database or repeated in this document")
+                k4.metric("Mode", ext_stats.get("mode", "OCR").split("(")[0].strip())
 
-                s_dist = ext_stats.get("subject_counts", {})
-                if s_dist:
-                    dist_cols = st.columns(min(5, len(s_dist)))
-                    for d_idx, (s_name, s_count) in enumerate(s_dist.items()):
+                if len(duplicate_qs) > 0:
+                    st.info(
+                        f"🛡️ **Deduplication Active:** **{len(duplicate_qs)}** question(s) already exist in your Question Bank or were repeated in this PDF. "
+                        "They will **NOT** be inserted again, ensuring your question bank never has questions repeated twice or thrice."
+                    )
+                    with st.expander(f"🔍 Inspect {len(duplicate_qs)} Filtered Duplicate Question(s)", expanded=False):
+                        for dq in duplicate_qs[:25]:
+                            st.write(f"- **{dq.get('question', '')[:90]}...** — *{dq.get('duplicate_reason', 'Duplicate')}*")
+                        if len(duplicate_qs) > 25:
+                            st.caption(f"... and {len(duplicate_qs) - 25} more duplicate questions safely filtered out.")
+
+                # 3. Subject Sorting Distribution Grid
+                st.markdown("#### 🧭 Automatic Subject Distribution (New Unique Questions)")
+                u_subj_counts: Dict[str, int] = {}
+                for q in unique_qs:
+                    s_name = q.get("subject", "Other")
+                    u_subj_counts[s_name] = u_subj_counts.get(s_name, 0) + 1
+
+                if u_subj_counts:
+                    dist_cols = st.columns(min(5, len(u_subj_counts)))
+                    for d_idx, (s_name, s_count) in enumerate(u_subj_counts.items()):
                         dist_cols[d_idx % len(dist_cols)].metric(s_name, f"{s_count} Qs")
+                elif len(unique_qs) == 0:
+                    st.warning("⚠️ **All questions in this PDF already exist in your Question Bank!** Zero duplicate questions will be inserted.")
 
-                # Preview Data Table
-                prev_df = pd.DataFrame(ext_questions)
-                cols_to_preview = ["subject", "topic", "question", "correct_option", "difficulty", "explanation"]
-                avail_prev_cols = [c for c in cols_to_preview if c in prev_df.columns]
-                st.dataframe(prev_df[avail_prev_cols], use_container_width=True, hide_index=True)
+                # 4. Preview Data Table
+                if unique_qs:
+                    prev_df = pd.DataFrame(unique_qs)
+                    cols_to_preview = ["subject", "topic", "question", "correct_option", "difficulty", "explanation"]
+                    avail_prev_cols = [c for c in cols_to_preview if c in prev_df.columns]
+                    st.dataframe(prev_df[avail_prev_cols], use_container_width=True, hide_index=True)
 
-                # Inspect Cards Expander
-                with st.expander(f"🔍 Inspect All {len(ext_questions)} Extracted Question Cards", expanded=False):
-                    for idx, q_dict in enumerate(ext_questions):
-                        _render_question_card_view(q_dict, show_actions=False, key_prefix=f"prev_{idx}")
+                    with st.expander(f"🔍 Inspect All {len(unique_qs)} Unique Question Cards Before Saving", expanded=False):
+                        for idx, q_dict in enumerate(unique_qs):
+                            _render_question_card_view(q_dict, show_actions=False, key_prefix=f"prev_{idx}")
 
-                # Save or Discard Buttons
+                # 5. Save or Discard Actions
                 sv_col1, sv_col2 = st.columns([3, 1])
-                if sv_col1.button(f"💾 Add All {len(ext_questions)} Questions to Mock Question Database", type="primary", use_container_width=True, key="btn_save_extracted_to_db"):
+                btn_save_text = f"💾 Add {len(unique_qs)} Unique Questions to Mock Database" if unique_qs else "💾 No New Questions to Add (All Duplicate)"
+                if sv_col1.button(btn_save_text, type="primary", use_container_width=True, disabled=len(unique_qs) == 0, key="btn_save_extracted_to_db"):
+                    # Check if user chose to replace/purge existing mock test questions
+                    if st.session_state.get("pdf_dup_handling_mode", "").startswith("🔄"):
+                        db.delete_mock_test(ext_stats.get("mock_title", ""))
+
                     saved_count = 0
-                    for q_item in ext_questions:
-                        db.add_question(q_item)
+                    for q_item in unique_qs:
+                        db.add_question(q_item, skip_if_duplicate=True)
                         saved_count += 1
+
+                    # Record uploaded file in the registry
+                    fname = ext_stats.get("filename", ext_stats.get("mock_title", "mock.pdf"))
+                    fhash = ext_stats.get("file_hash", "")
+                    fbytes_len = ext_stats.get("file_bytes_len", 0)
+                    db.record_uploaded_pdf(
+                        filename=fname,
+                        file_hash=fhash,
+                        mock_title=ext_stats.get("mock_title", ""),
+                        questions_count=saved_count,
+                        file_size_bytes=fbytes_len,
+                    )
+
                     st.session_state["extracted_mock_preview"] = None
-                    st.success(f"✨ Successfully added {saved_count} mock questions to your database! They are now visible in the 'Mock Questions Bank' tab.")
+                    st.success(f"✨ Successfully added **{saved_count}** unique mock questions! (Prevented {len(duplicate_qs)} duplicates from repeating).")
                     st.rerun()
 
                 if sv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_prev"):
+                    st.session_state["extracted_mock_preview"] = None
+                    st.rerun()
                     st.session_state["extracted_mock_preview"] = None
                     st.rerun()
 

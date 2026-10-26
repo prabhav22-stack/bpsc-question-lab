@@ -647,6 +647,102 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
         sliced_reader = pypdf.PdfReader(io.BytesIO(sliced_bytes))
         self.assertEqual(len(sliced_reader.pages), 1)
 
+    def test_normalize_question_text(self):
+        """Verify that question stems are normalized accurately across numbered variations."""
+        stems = [
+            "1. Which river is known as the Sorrow of Bihar?",
+            "Q. 1 Which river is known as the Sorrow of Bihar",
+            "Question 1: Which river is known as the Sorrow of Bihar?",
+            "(1) Which river is known as the Sorrow of Bihar?",
+            "Which river is known as the Sorrow of Bihar?",
+        ]
+        normalized = [db.normalize_question_text(s) for s in stems]
+        # All 5 variations must produce the exact same normalized stem
+        self.assertEqual(len(set(normalized)), 1)
+        self.assertEqual(normalized[0], "which river is known as the sorrow of bihar")
+
+    def test_filter_duplicate_questions(self):
+        """Verify that filter_duplicate_questions detects intra-batch and database duplicates."""
+        # Insert a baseline question into self.conn
+        item = {
+            "exam": "BPSC",
+            "subject": "Geography",
+            "topic": "Rivers",
+            "question": "Which river is known as the Sorrow of Bihar?",
+            "option_a": "Ganga",
+            "option_b": "Kosi",
+            "option_c": "Son",
+            "option_d": "Gandak",
+            "correct_option": "B",
+        }
+        db.insert_question(self.conn, item)
+        self.conn.commit()
+
+        incoming_batch = [
+            # 1. Duplicate of question already in DB (with leading '1. ')
+            {
+                "question": "1. Which river is known as the Sorrow of Bihar?",
+                "option_a": "Ganga",
+                "option_b": "Kosi",
+                "option_c": "Son",
+                "option_d": "Gandak",
+                "correct_option": "B",
+                "subject": "Geography",
+            },
+            # 2. New unique question
+            {
+                "question": "What is the capital of Bihar?",
+                "option_a": "Gaya",
+                "option_b": "Patna",
+                "option_c": "Munger",
+                "option_d": "Bhagalpur",
+                "correct_option": "B",
+                "subject": "Bihar Special",
+            },
+            # 3. Repeat of question 2 within the same batch (intra-batch duplicate)
+            {
+                "question": "Q2. What is the capital of Bihar?",
+                "option_a": "Gaya",
+                "option_b": "Patna",
+                "option_c": "Munger",
+                "option_d": "Bhagalpur",
+                "correct_option": "B",
+                "subject": "Bihar Special",
+            },
+        ]
+
+        unique_qs, dupes = db.filter_duplicate_questions(incoming_batch, conn=self.conn)
+        self.assertEqual(len(unique_qs), 1)
+        self.assertEqual(len(dupes), 2)
+        self.assertIn("capital of Bihar", unique_qs[0]["question"])
+        self.assertIn("Already exists", dupes[0]["duplicate_reason"])
+        self.assertIn("current upload batch", dupes[1]["duplicate_reason"])
+
+    def test_pdf_upload_registry(self):
+        """Verify tracking of uploaded mock PDF file names and hashes."""
+        # Test file not uploaded yet
+        is_up, _ = db.is_pdf_already_uploaded("drishti_mock_01.pdf", "hash123")
+        self.assertFalse(is_up)
+
+        # Record file
+        db.record_uploaded_pdf(
+            filename="drishti_mock_01.pdf",
+            file_hash="hash123",
+            mock_title="Drishti Mock 01",
+            questions_count=100,
+        )
+
+        # Test file detected
+        is_up2, meta = db.is_pdf_already_uploaded("drishti_mock_01.pdf", "hash123")
+        self.assertTrue(is_up2)
+        self.assertEqual(meta["mock_title"], "Drishti Mock 01")
+        self.assertEqual(meta["questions_count"], 100)
+
+        # Cleanup
+        db.delete_mock_test("Drishti Mock 01")
+        is_up3, _ = db.is_pdf_already_uploaded("drishti_mock_01.pdf", "hash123")
+        self.assertFalse(is_up3)
+
 
 if __name__ == "__main__":
     unittest.main()

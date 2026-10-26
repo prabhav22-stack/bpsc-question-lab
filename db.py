@@ -10,6 +10,7 @@ Features:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 import sqlite3
@@ -1709,6 +1710,19 @@ def init_db() -> None:
             )
         """)
 
+        # 7. Uploaded Mock Test PDF Files Registry
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS uploaded_mock_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL UNIQUE,
+                file_hash TEXT NOT NULL DEFAULT '',
+                mock_title TEXT NOT NULL DEFAULT '',
+                uploaded_at TEXT NOT NULL,
+                questions_count INTEGER NOT NULL DEFAULT 0,
+                file_size_bytes INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
         # Seed initial questions if table is completely empty
         count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
         if count == 0:
@@ -1764,9 +1778,272 @@ def insert_question(conn: sqlite3.Connection, item: Dict[str, Any]) -> int:
     return int(cur.lastrowid)
 
 
-def add_question(item: Dict[str, Any]) -> int:
-    """Thread-safe single question insertion."""
+def normalize_question_text(text: str) -> str:
+    """Normalize question stem for high-accuracy deduplication.
+
+    Removes:
+    - Leading question numbers (e.g. '1.', '1)', 'Q.1', 'Question 25 -')
+    - Formatting noise and non-word characters
+    - Case differences and redundant whitespaces
+    """
+    if not text:
+        return ""
+    s = str(text).strip()
+    s = re.sub(
+        r"^(?:\(?\d{1,4}\)?[\.\:\-\s]+|q(?:uestion)?\s*[\.\:\-]?\s*\d{1,4}[\.\)\:\-\s]+)",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = s.rstrip("?.:;! \t\n\r")
+    s = re.sub(r"\s+", " ", s.lower()).strip()
+    return s
+
+
+def is_question_duplicate(
+    stem: str, conn: Optional[sqlite3.Connection] = None
+) -> Tuple[bool, Optional[int]]:
+    """Check if a question stem already exists in the database.
+
+    Checks exact match first, then normalized stem match.
+    Returns:
+        (is_duplicate: bool, existing_id: Optional[int])
+    """
+    if not stem or not str(stem).strip():
+        return False, None
+
+    raw_stem = str(stem).strip()
+    norm_stem = normalize_question_text(raw_stem)
+
+    def _check(c: sqlite3.Connection) -> Tuple[bool, Optional[int]]:
+        row = c.execute(
+            "SELECT id FROM questions WHERE lower(trim(question)) = lower(trim(?)) LIMIT 1",
+            (raw_stem,),
+        ).fetchone()
+        if row:
+            return True, int(row[0])
+
+        all_stems = c.execute("SELECT id, question FROM questions").fetchall()
+        for qid, q_text in all_stems:
+            if normalize_question_text(q_text) == norm_stem:
+                return True, int(qid)
+        return False, None
+
+    if conn is not None:
+        return _check(conn)
+    with connect_db() as c:
+        return _check(c)
+
+
+def filter_duplicate_questions(
+    questions: List[Dict[str, Any]],
+    conn: Optional[sqlite3.Connection] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Separate a list of questions into unique new questions and duplicate questions.
+
+    Deduplicates both intra-batch (within the incoming list) and against the database.
+
+    Returns:
+        (unique_questions, duplicate_questions)
+    """
+    unique_list: List[Dict[str, Any]] = []
+    duplicate_list: List[Dict[str, Any]] = []
+    seen_batch_stems: set = set()
+
+    def _process(c: sqlite3.Connection):
+        db_rows = c.execute("SELECT id, question FROM questions").fetchall()
+        db_stems = {normalize_question_text(r[1]): int(r[0]) for r in db_rows if r[1]}
+
+        for q in questions:
+            stem = q.get("question", "")
+            norm = normalize_question_text(stem)
+            if not norm:
+                continue
+
+            if norm in seen_batch_stems:
+                duplicate_list.append(
+                    {**q, "duplicate_reason": "Repeated within current upload batch"}
+                )
+                continue
+
+            if norm in db_stems:
+                duplicate_list.append(
+                    {
+                        **q,
+                        "duplicate_reason": f"Already exists in Question Bank (#Q{db_stems[norm]})",
+                    }
+                )
+                continue
+
+            seen_batch_stems.add(norm)
+            unique_list.append(q)
+
+    if conn is not None:
+        _process(conn)
+    else:
+        with connect_db() as c:
+            _process(c)
+
+    return unique_list, duplicate_list
+
+
+def _ensure_mock_files_table(conn: sqlite3.Connection) -> None:
+    """Ensure uploaded_mock_files table exists in connection."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS uploaded_mock_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            file_hash TEXT NOT NULL DEFAULT '',
+            mock_title TEXT NOT NULL DEFAULT '',
+            uploaded_at TEXT NOT NULL,
+            questions_count INTEGER NOT NULL DEFAULT 0,
+            file_size_bytes INTEGER NOT NULL DEFAULT 0
+        )
+    """
+    )
+
+
+def is_pdf_already_uploaded(
+    filename: str, file_hash: str = "", conn_factory: Any = None
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """Check if a PDF filename or hash has already been uploaded."""
+    clean_name = str(filename).strip().lower()
+    clean_hash = str(file_hash).strip().lower()
+    connector = conn_factory or connect_db
+
+    with connector() as conn:
+        _ensure_mock_files_table(conn)
+        if clean_hash:
+            row = conn.execute(
+                "SELECT * FROM uploaded_mock_files WHERE lower(filename) = ? OR lower(file_hash) = ? LIMIT 1",
+                (clean_name, clean_hash),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM uploaded_mock_files WHERE lower(filename) = ? LIMIT 1",
+                (clean_name,),
+            ).fetchone()
+
+        if row:
+            return True, dict(row)
+
+        try:
+            q_row = conn.execute(
+                "SELECT COUNT(*), MIN(created_at), source_name FROM questions WHERE lower(source_name) = ? OR lower(exam_edition) LIKE ? GROUP BY source_name LIMIT 1",
+                (clean_name, f"%{clean_name}%"),
+            ).fetchone()
+            if q_row and q_row[0] > 0:
+                return True, {
+                    "filename": filename,
+                    "file_hash": file_hash,
+                    "mock_title": q_row[2] or filename,
+                    "uploaded_at": q_row[1] or "Previously",
+                    "questions_count": q_row[0],
+                }
+        except Exception:
+            pass
+
+        return False, None
+
+
+def record_uploaded_pdf(
+    filename: str,
+    file_hash: str,
+    mock_title: str,
+    questions_count: int,
+    file_size_bytes: int = 0,
+    conn_factory: Any = None,
+) -> None:
+    """Record an uploaded mock PDF file in the registry."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_mock_files_table(conn)
+        conn.execute(
+            """
+            INSERT INTO uploaded_mock_files (filename, file_hash, mock_title, uploaded_at, questions_count, file_size_bytes)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(filename) DO UPDATE SET
+                file_hash = excluded.file_hash,
+                mock_title = excluded.mock_title,
+                uploaded_at = excluded.uploaded_at,
+                questions_count = excluded.questions_count,
+                file_size_bytes = excluded.file_size_bytes
+        """,
+            (
+                filename.strip(),
+                file_hash.strip(),
+                mock_title.strip(),
+                datetime.now().isoformat(timespec="seconds"),
+                questions_count,
+                file_size_bytes,
+            ),
+        )
+        conn.commit()
+
+
+def get_all_uploaded_mock_files(conn_factory: Any = None) -> pd.DataFrame:
+    """Return all recorded uploaded PDF files."""
+    connector = conn_factory or connect_db
+    with connector() as conn:
+        _ensure_mock_files_table(conn)
+        return pd.read_sql_query(
+            "SELECT * FROM uploaded_mock_files ORDER BY id DESC", conn
+        )
+
+
+def find_and_remove_duplicate_questions() -> Tuple[int, List[Dict[str, Any]]]:
+    """Find and remove duplicate questions from the database, preserving the oldest record.
+
+    Returns:
+        (deleted_count, list_of_cleaned_stems)
+    """
     with connect_db() as conn:
+        all_rows = conn.execute(
+            "SELECT id, question, subject, topic FROM questions ORDER BY id ASC"
+        ).fetchall()
+        seen: Dict[str, int] = {}
+        to_delete_ids: List[int] = []
+        cleaned_info: List[Dict[str, Any]] = []
+
+        for r in all_rows:
+            qid = int(r["id"])
+            norm = normalize_question_text(r["question"])
+            if not norm:
+                continue
+            if norm in seen:
+                to_delete_ids.append(qid)
+                cleaned_info.append(
+                    {
+                        "deleted_id": qid,
+                        "kept_id": seen[norm],
+                        "stem": r["question"][:80]
+                        + ("..." if len(r["question"]) > 80 else ""),
+                        "subject": r["subject"],
+                    }
+                )
+            else:
+                seen[norm] = qid
+
+        if to_delete_ids:
+            placeholders = ",".join("?" for _ in to_delete_ids)
+            conn.execute(
+                f"DELETE FROM questions WHERE id IN ({placeholders})",
+                to_delete_ids,
+            )
+            conn.commit()
+
+        return len(to_delete_ids), cleaned_info
+
+
+def add_question(item: Dict[str, Any], skip_if_duplicate: bool = False) -> int:
+    """Thread-safe single question insertion with optional deduplication."""
+    with connect_db() as conn:
+        if skip_if_duplicate:
+            stem = item.get("question", "")
+            is_dup, existing_id = is_question_duplicate(stem, conn=conn)
+            if is_dup and existing_id:
+                return existing_id
         qid = insert_question(conn, item)
         conn.commit()
         return qid
@@ -1832,8 +2109,12 @@ def delete_mock_test(source_name: str) -> int:
     """Delete all mock questions associated with a given mock test name."""
     with connect_db() as conn:
         cur = conn.execute(
-            "DELETE FROM questions WHERE source_type = 'Mock question' AND source_name = ?",
-            (source_name,),
+            "DELETE FROM questions WHERE source_type = 'Mock question' AND (source_name = ? OR exam_edition LIKE ?)",
+            (source_name, f"%{source_name}%"),
+        )
+        conn.execute(
+            "DELETE FROM uploaded_mock_files WHERE lower(mock_title) = ? OR lower(filename) = ? OR lower(filename) LIKE ?",
+            (source_name.lower(), source_name.lower(), f"%{source_name.lower()}%"),
         )
         conn.commit()
         return cur.rowcount
@@ -2281,7 +2562,15 @@ def import_csv(uploaded_file: Any, conn_factory: Any = None) -> Tuple[int, List[
 def export_sqlite_to_json() -> str:
     """Export all tables to a clean JSON string for migration or backup."""
     with connect_db() as conn:
-        tables = ["questions", "attempts", "test_sessions", "revision_items", "pinned_notebook", "research_notes"]
+        tables = [
+            "questions",
+            "attempts",
+            "test_sessions",
+            "revision_items",
+            "pinned_notebook",
+            "research_notes",
+            "uploaded_mock_files",
+        ]
         export_data = {}
         for t in tables:
             rows = conn.execute(f"SELECT * FROM {t}").fetchall()

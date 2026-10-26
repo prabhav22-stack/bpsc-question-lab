@@ -10,8 +10,10 @@ BPSC / UPSC syllabus subjects.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -137,6 +139,7 @@ def extract_mock_questions_from_pdf(
 
     pages_to_process = list(range(s_idx, e_idx))
     total_to_process = len(pages_to_process)
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
     # Divide into chunks
     chunks: List[Tuple[int, int]] = []
@@ -147,6 +150,8 @@ def extract_mock_questions_from_pdf(
 
     all_extracted: List[Dict[str, Any]] = []
     subject_counts: Dict[str, int] = {}
+    seen_stems: set = set()
+    internal_duplicates = 0
 
     if progress_callback:
         progress_callback(
@@ -217,12 +222,26 @@ def extract_mock_questions_from_pdf(
                 parsed_json = json.loads(response.text)
                 q_set = ExtractedMockQuestionSet.model_validate(parsed_json)
                 for q in q_set.questions:
+                    # Deduplicate questions within the document
+                    raw_stem = q.question.strip()
+                    s_clean = re.sub(
+                        r"^(?:\(?\d{1,4}\)?[\.\:\-\s]+|q(?:uestion)?\s*[\.\:\-]?\s*\d{1,4}[\.\)\:\-\s]+)",
+                        "",
+                        raw_stem,
+                        flags=re.IGNORECASE,
+                    )
+                    norm_stem = re.sub(r"\s+", " ", s_clean.lower()).rstrip("?.:;! \t\n\r")
+                    if norm_stem in seen_stems:
+                        internal_duplicates += 1
+                        continue
+                    seen_stems.add(norm_stem)
+
                     # Prepare database-ready dictionary
                     q_dict = {
                         "exam": target_exam,
                         "subject": q.subject,
                         "topic": q.topic.strip() or "General",
-                        "question": q.question.strip(),
+                        "question": raw_stem,
                         "option_a": q.option_a.strip(),
                         "option_b": q.option_b.strip(),
                         "option_c": q.option_c.strip(),
@@ -248,7 +267,11 @@ def extract_mock_questions_from_pdf(
             pass
 
     if progress_callback:
-        progress_callback(1.0, f"Extraction complete: {len(all_extracted)} question(s) parsed and categorized.")
+        progress_callback(
+            1.0,
+            f"Extraction complete: {len(all_extracted)} question(s) parsed and categorized."
+            + (f" ({internal_duplicates} repeated question(s) skipped in document)" if internal_duplicates > 0 else ""),
+        )
 
     stats = {
         "mode": mode_desc,
@@ -256,6 +279,8 @@ def extract_mock_questions_from_pdf(
         "total_doc_pages": total_doc_pages,
         "pages_processed": total_to_process,
         "total_extracted": len(all_extracted),
+        "internal_duplicates_skipped": internal_duplicates,
+        "file_hash": file_hash,
         "subject_counts": subject_counts,
         "mock_title": mock_title,
     }

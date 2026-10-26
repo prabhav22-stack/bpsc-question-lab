@@ -38,6 +38,9 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - **Dedicated Mock Questions Bank**: Browse, filter, search, and practice third-party test series questions and mock exams with distinct provenance tracking.
    - **Automated PDF Question Extraction**: Supports both digital OCR text PDFs and scanned image PDFs using Gemini 2.5 / 1.5 Multimodal Vision and `pypdf`.
    - **Deterministic Syllabus Subject Sorting**: Automatically sorts extracted questions into the 10 standard syllabus subjects (`Modern History`, `Ancient & Medieval History`, `Bihar Special`, `Geography`, `Indian Polity`, `Economy`, `General Science`, `Environment`, `Current Affairs`, `Other`).
+   - **PDF Filename & Hash Duplicate Detection**: Automatically tracks uploaded PDF filenames and SHA-256 hashes in `uploaded_mock_files` to prevent re-uploading the same mock test paper.
+   - **Intra-Batch & Question Bank Deduplication**: Normalizes question stems (stripping numbering, whitespace, punctuation) to ensure no question is repeated twice or thrice.
+   - **Question Bank Integrity Scanner**: One-click scanner in the Mock Questions Bank to detect and clean any duplicate questions.
    - **No Upload File Size Limit**: Configured for high-capacity files up to 2GB with streaming chunk processing.
    - **Direct Practice Drills**: Launch mock test simulation drills directly from the Mock Questions Bank or practice mode.
 
@@ -72,7 +75,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 47 tests (19 legacy regression tests + 24 v1.0 feature tests + 4 mock questions & PDF extractor tests):
+Run all 50 tests (19 legacy regression tests + 24 v1.0 feature tests + 7 mock questions, deduplication & PDF extractor tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
