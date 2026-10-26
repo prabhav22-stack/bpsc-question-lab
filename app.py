@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+import importlib
 
 import ai_service
 import analytics
@@ -29,6 +30,145 @@ import pdf_extractor
 import revision_engine
 import schemas
 import supabase_client
+
+# Force-reload local modules to guarantee Streamlit hot-reloading captures newly pulled modules
+try:
+    importlib.reload(db)
+    importlib.reload(analytics)
+    importlib.reload(config)
+    importlib.reload(ai_service)
+    importlib.reload(ocr_engine)
+    importlib.reload(pdf_extractor)
+    importlib.reload(revision_engine)
+    importlib.reload(schemas)
+except Exception:
+    pass
+
+# Defensive runtime fallbacks on db module to prevent AttributeError if Streamlit daemon cached an older module object
+if not hasattr(db, "count_questions"):
+    def _fallback_count_questions(source_type: str = "All", conn_factory: Any = None) -> int:
+        connector = conn_factory or db.connect_db
+        with connector() as conn:
+            if source_type != "All":
+                row = conn.execute("SELECT COUNT(*) FROM questions WHERE source_type = ?", (source_type,)).fetchone()
+            else:
+                row = conn.execute("SELECT COUNT(*) FROM questions").fetchone()
+            return int(row[0]) if row else 0
+    db.count_questions = _fallback_count_questions
+
+if not hasattr(db, "get_question_bank_summary"):
+    def _fallback_get_question_bank_summary(conn_factory: Any = None) -> Dict[str, Any]:
+        connector = conn_factory or db.connect_db
+        try:
+            with connector() as conn:
+                total = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+                pyq = conn.execute("SELECT COUNT(*) FROM questions WHERE source_type = 'Official PYQ'").fetchone()[0]
+                mock = conn.execute("SELECT COUNT(*) FROM questions WHERE source_type = 'Mock question'").fetchone()[0]
+                ai = conn.execute("SELECT COUNT(*) FROM questions WHERE source_type = 'AI-generated'").fetchone()[0]
+                sample = conn.execute("SELECT COUNT(*) FROM questions WHERE source_type = 'Built-in sample'").fetchone()[0]
+                subjs = conn.execute("SELECT COUNT(DISTINCT subject) FROM questions WHERE subject != ''").fetchone()[0]
+                sources = conn.execute("SELECT COUNT(DISTINCT source_name) FROM questions WHERE source_name != ''").fetchone()[0]
+                return {
+                    "total_questions": int(total),
+                    "pyq_count": int(pyq),
+                    "mock_count": int(mock),
+                    "ai_count": int(ai),
+                    "sample_count": int(sample),
+                    "distinct_subjects": int(subjs),
+                    "distinct_sources": int(sources),
+                }
+        except Exception:
+            return {"total_questions": 0, "pyq_count": 0, "mock_count": 0, "ai_count": 0, "sample_count": 0, "distinct_subjects": 0, "distinct_sources": 0}
+    db.get_question_bank_summary = _fallback_get_question_bank_summary
+
+if not hasattr(db, "get_distinct_subjects"):
+    def _fallback_get_distinct_subjects(exam: str = "All", source_type: str = "All", conn_factory: Any = None) -> List[str]:
+        connector = conn_factory or db.connect_db
+        query = "SELECT DISTINCT subject FROM questions WHERE subject != ''"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
+        if source_type != "All":
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY subject"
+        with connector() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [r[0] for r in rows if r[0]]
+    db.get_distinct_subjects = _fallback_get_distinct_subjects
+
+if not hasattr(db, "get_distinct_topics"):
+    def _fallback_get_distinct_topics(subject: Optional[str] = None, exam: str = "All", source_type: str = "All", conn_factory: Any = None) -> List[str]:
+        connector = conn_factory or db.connect_db
+        query = "SELECT DISTINCT topic FROM questions WHERE topic != ''"
+        params: List[Any] = []
+        if subject and subject != "All":
+            query += " AND subject = ?"
+            params.append(subject)
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
+        if source_type != "All":
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY topic"
+        with connector() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [r[0] for r in rows if r[0]]
+    db.get_distinct_topics = _fallback_get_distinct_topics
+
+if not hasattr(db, "get_distinct_editions"):
+    def _fallback_get_distinct_editions(source_type: str = "All", conn_factory: Any = None) -> List[str]:
+        connector = conn_factory or db.connect_db
+        with connector() as conn:
+            if source_type != "All":
+                rows = conn.execute("SELECT DISTINCT exam_edition FROM questions WHERE source_type = ? AND exam_edition != '' ORDER BY exam_edition", (source_type,)).fetchall()
+            else:
+                rows = conn.execute("SELECT DISTINCT exam_edition FROM questions WHERE exam_edition != '' ORDER BY exam_edition").fetchall()
+            return [r[0] for r in rows if r[0]]
+    db.get_distinct_editions = _fallback_get_distinct_editions
+
+if not hasattr(db, "get_subject_counts"):
+    def _fallback_get_subject_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+        connector = conn_factory or db.connect_db
+        with connector() as conn:
+            if source_type != "All":
+                rows = conn.execute("SELECT subject, COUNT(*) FROM questions WHERE source_type = ? GROUP BY subject ORDER BY COUNT(*) DESC", (source_type,)).fetchall()
+            else:
+                rows = conn.execute("SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY COUNT(*) DESC").fetchall()
+            return {r[0]: int(r[1]) for r in rows if r[0]}
+    db.get_subject_counts = _fallback_get_subject_counts
+
+if not hasattr(db, "get_difficulty_counts"):
+    def _fallback_get_difficulty_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+        connector = conn_factory or db.connect_db
+        with connector() as conn:
+            if source_type != "All":
+                rows = conn.execute("SELECT difficulty, COUNT(*) FROM questions WHERE source_type = ? GROUP BY difficulty", (source_type,)).fetchall()
+            else:
+                rows = conn.execute("SELECT difficulty, COUNT(*) FROM questions GROUP BY difficulty").fetchall()
+            return {r[0]: int(r[1]) for r in rows if r[0]}
+    db.get_difficulty_counts = _fallback_get_difficulty_counts
+
+if not hasattr(db, "get_pinned_question_ids"):
+    def _fallback_get_pinned_question_ids() -> Set[int]:
+        with db.connect_db() as conn:
+            rows = conn.execute("SELECT question_id FROM pinned_notebook").fetchall()
+            return {int(r["question_id"]) for r in rows}
+    db.get_pinned_question_ids = _fallback_get_pinned_question_ids
+
+if not hasattr(db, "get_pinned_questions_df"):
+    def _fallback_get_pinned_questions_df(conn_factory: Any = None) -> pd.DataFrame:
+        connector = conn_factory or db.connect_db
+        with connector() as conn:
+            return pd.read_sql_query("""
+                SELECT q.*, p.pinned_at, p.note as pin_notes
+                FROM questions q
+                JOIN pinned_notebook p ON q.id = p.question_id
+                ORDER BY p.pinned_at DESC
+            """, conn)
+    db.get_pinned_questions_df = _fallback_get_pinned_questions_df
 
 APP_VERSION = "2.0.0"
 
