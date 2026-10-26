@@ -1637,17 +1637,17 @@ def init_db() -> None:
                 pass
 
         # High-Speed B-Tree Indexes for Instant Lookups on 7,500+ MCQs
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_normalized_stem ON questions(normalized_stem);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_source_type ON questions(source_type);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_topic ON questions(topic);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_exam ON questions(exam);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_source_name ON questions(source_name);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_exam_edition ON questions(exam_edition);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_difficulty ON questions(difficulty);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_attempts_question_id ON attempts(question_id);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_pinned_question_id ON pinned_notebook(question_id);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_revision_items_qid ON revision_items(question_id);")
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_normalized_stem ON questions(normalized_stem);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_source_type ON questions(source_type);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_topic ON questions(topic);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_exam ON questions(exam);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_source_name ON questions(source_name);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_exam_edition ON questions(exam_edition);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_difficulty ON questions(difficulty);")
+        except Exception:
+            pass
 
         # 2. Attempts table
         conn.execute("""
@@ -1677,6 +1677,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE attempts ADD COLUMN confidence_rating TEXT NOT NULL DEFAULT ''")
         if "score" not in att_cols:
             conn.execute("ALTER TABLE attempts ADD COLUMN score REAL NOT NULL DEFAULT 0.0")
+
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_attempts_question_id ON attempts(question_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_attempts_session_id ON attempts(test_session_id);")
+        except Exception:
+            pass
 
         # 3. Test Sessions table (tracks full test attempts, timed drills, mock tests)
         conn.execute("""
@@ -1712,6 +1718,10 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             )
         """)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_revision_items_due ON revision_items(due_date, is_completed);")
+        except Exception:
+            pass
 
         # 5. Error Notebook Pins and Bookmark Notes
         conn.execute("""
@@ -1724,6 +1734,10 @@ def init_db() -> None:
                 FOREIGN KEY(question_id) REFERENCES questions(id)
             )
         """)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pinned_question_id ON pinned_notebook(question_id);")
+        except Exception:
+            pass
 
         # 6. Current Affairs & Source Research Notes
         conn.execute("""
