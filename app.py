@@ -82,7 +82,11 @@ if not hasattr(db, "get_question_bank_summary"):
     db.get_question_bank_summary = _fallback_get_question_bank_summary
 
 if not hasattr(db, "get_distinct_subjects"):
-    def _fallback_get_distinct_subjects(exam: str = "All", source_type: str = "All", conn_factory: Any = None) -> List[str]:
+    def _fallback_get_distinct_subjects(source_type: str = "All", exam: str = "All", conn_factory: Any = None, **kwargs: Any) -> List[str]:
+        if "source_type" in kwargs:
+            source_type = kwargs["source_type"]
+        if "exam" in kwargs:
+            exam = kwargs["exam"]
         connector = conn_factory or db.connect_db
         query = "SELECT DISTINCT subject FROM questions WHERE subject != ''"
         params: List[Any] = []
@@ -99,7 +103,13 @@ if not hasattr(db, "get_distinct_subjects"):
     db.get_distinct_subjects = _fallback_get_distinct_subjects
 
 if not hasattr(db, "get_distinct_topics"):
-    def _fallback_get_distinct_topics(subject: Optional[str] = None, exam: str = "All", source_type: str = "All", conn_factory: Any = None) -> List[str]:
+    def _fallback_get_distinct_topics(subject: Optional[str] = "All", source_type: str = "All", exam: str = "All", conn_factory: Any = None, **kwargs: Any) -> List[str]:
+        if "subject" in kwargs:
+            subject = kwargs["subject"]
+        if "source_type" in kwargs:
+            source_type = kwargs["source_type"]
+        if "exam" in kwargs:
+            exam = kwargs["exam"]
         connector = conn_factory or db.connect_db
         query = "SELECT DISTINCT topic FROM questions WHERE topic != ''"
         params: List[Any] = []
@@ -119,35 +129,65 @@ if not hasattr(db, "get_distinct_topics"):
     db.get_distinct_topics = _fallback_get_distinct_topics
 
 if not hasattr(db, "get_distinct_editions"):
-    def _fallback_get_distinct_editions(source_type: str = "All", conn_factory: Any = None) -> List[str]:
+    def _fallback_get_distinct_editions(source_type: str = "All", exam: str = "All", conn_factory: Any = None, **kwargs: Any) -> List[str]:
+        if "source_type" in kwargs:
+            source_type = kwargs["source_type"]
+        if "exam" in kwargs:
+            exam = kwargs["exam"]
         connector = conn_factory or db.connect_db
+        query = "SELECT DISTINCT exam_edition FROM questions WHERE exam_edition != ''"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
+        if source_type != "All":
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY exam_edition"
         with connector() as conn:
-            if source_type != "All":
-                rows = conn.execute("SELECT DISTINCT exam_edition FROM questions WHERE source_type = ? AND exam_edition != '' ORDER BY exam_edition", (source_type,)).fetchall()
-            else:
-                rows = conn.execute("SELECT DISTINCT exam_edition FROM questions WHERE exam_edition != '' ORDER BY exam_edition").fetchall()
+            rows = conn.execute(query, params).fetchall()
             return [r[0] for r in rows if r[0]]
     db.get_distinct_editions = _fallback_get_distinct_editions
 
 if not hasattr(db, "get_subject_counts"):
-    def _fallback_get_subject_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+    def _fallback_get_subject_counts(source_type: str = "All", exam: str = "All", conn_factory: Any = None, **kwargs: Any) -> Dict[str, int]:
+        if "source_type" in kwargs:
+            source_type = kwargs["source_type"]
+        if "exam" in kwargs:
+            exam = kwargs["exam"]
         connector = conn_factory or db.connect_db
+        query = "SELECT subject, COUNT(*) FROM questions WHERE 1=1"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
+        if source_type != "All":
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " GROUP BY subject ORDER BY COUNT(*) DESC"
         with connector() as conn:
-            if source_type != "All":
-                rows = conn.execute("SELECT subject, COUNT(*) FROM questions WHERE source_type = ? GROUP BY subject ORDER BY COUNT(*) DESC", (source_type,)).fetchall()
-            else:
-                rows = conn.execute("SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY COUNT(*) DESC").fetchall()
+            rows = conn.execute(query, params).fetchall()
             return {r[0]: int(r[1]) for r in rows if r[0]}
     db.get_subject_counts = _fallback_get_subject_counts
 
 if not hasattr(db, "get_difficulty_counts"):
-    def _fallback_get_difficulty_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+    def _fallback_get_difficulty_counts(source_type: str = "All", exam: str = "All", conn_factory: Any = None, **kwargs: Any) -> Dict[str, int]:
+        if "source_type" in kwargs:
+            source_type = kwargs["source_type"]
+        if "exam" in kwargs:
+            exam = kwargs["exam"]
         connector = conn_factory or db.connect_db
+        query = "SELECT difficulty, COUNT(*) FROM questions WHERE 1=1"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
+        if source_type != "All":
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " GROUP BY difficulty"
         with connector() as conn:
-            if source_type != "All":
-                rows = conn.execute("SELECT difficulty, COUNT(*) FROM questions WHERE source_type = ? GROUP BY difficulty", (source_type,)).fetchall()
-            else:
-                rows = conn.execute("SELECT difficulty, COUNT(*) FROM questions GROUP BY difficulty").fetchall()
+            rows = conn.execute(query, params).fetchall()
             return {r[0]: int(r[1]) for r in rows if r[0]}
     db.get_difficulty_counts = _fallback_get_difficulty_counts
 

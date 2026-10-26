@@ -2275,31 +2275,56 @@ def get_question_bank_summary(conn_factory: Any = None) -> Dict[str, Any]:
         }
 
 
-def get_distinct_subjects(source_type: str = "All", conn_factory: Any = None) -> List[str]:
+def get_distinct_subjects(
+    source_type: str = "All",
+    exam: str = "All",
+    conn_factory: Any = None,
+    **kwargs: Any,
+) -> List[str]:
     """Return distinct subjects using fast indexed query."""
+    if "source_type" in kwargs:
+        source_type = kwargs["source_type"]
+    if "exam" in kwargs:
+        exam = kwargs["exam"]
     connector = conn_factory or connect_db
     with connector() as conn:
+        query = "SELECT DISTINCT subject FROM questions WHERE subject != ''"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
         if source_type != "All":
-            rows = conn.execute(
-                "SELECT DISTINCT subject FROM questions WHERE source_type = ? AND subject != '' ORDER BY subject",
-                (source_type,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT DISTINCT subject FROM questions WHERE subject != '' ORDER BY subject"
-            ).fetchall()
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY subject"
+        rows = conn.execute(query, params).fetchall()
         return [r[0] for r in rows if r[0]]
 
 
-def get_distinct_topics(subject: str = "All", source_type: str = "All", conn_factory: Any = None) -> List[str]:
+def get_distinct_topics(
+    subject: Optional[str] = "All",
+    source_type: str = "All",
+    exam: str = "All",
+    conn_factory: Any = None,
+    **kwargs: Any,
+) -> List[str]:
     """Return distinct topics using fast indexed query."""
+    if "subject" in kwargs:
+        subject = kwargs["subject"]
+    if "source_type" in kwargs:
+        source_type = kwargs["source_type"]
+    if "exam" in kwargs:
+        exam = kwargs["exam"]
     connector = conn_factory or connect_db
     with connector() as conn:
         query = "SELECT DISTINCT topic FROM questions WHERE topic != ''"
         params: List[Any] = []
-        if subject != "All":
+        if subject and subject != "All":
             query += " AND subject = ?"
             params.append(subject)
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
         if source_type != "All":
             query += " AND source_type = ?"
             params.append(source_type)
@@ -2308,51 +2333,81 @@ def get_distinct_topics(subject: str = "All", source_type: str = "All", conn_fac
         return [r[0] for r in rows if r[0]]
 
 
-def get_distinct_editions(source_type: str = "All", conn_factory: Any = None) -> List[str]:
+def get_distinct_editions(
+    source_type: str = "All",
+    exam: str = "All",
+    conn_factory: Any = None,
+    **kwargs: Any,
+) -> List[str]:
     """Return distinct exam editions using fast indexed query."""
+    if "source_type" in kwargs:
+        source_type = kwargs["source_type"]
+    if "exam" in kwargs:
+        exam = kwargs["exam"]
     connector = conn_factory or connect_db
     with connector() as conn:
+        query = "SELECT DISTINCT exam_edition FROM questions WHERE exam_edition != ''"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
         if source_type != "All":
-            rows = conn.execute(
-                "SELECT DISTINCT exam_edition FROM questions WHERE source_type = ? AND exam_edition != '' ORDER BY exam_edition",
-                (source_type,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT DISTINCT exam_edition FROM questions WHERE exam_edition != '' ORDER BY exam_edition"
-            ).fetchall()
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY exam_edition"
+        rows = conn.execute(query, params).fetchall()
         return [r[0] for r in rows if r[0]]
 
 
-def get_subject_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+def get_subject_counts(
+    source_type: str = "All",
+    exam: str = "All",
+    conn_factory: Any = None,
+    **kwargs: Any,
+) -> Dict[str, int]:
     """Return question distribution per subject using fast indexed group by."""
+    if "source_type" in kwargs:
+        source_type = kwargs["source_type"]
+    if "exam" in kwargs:
+        exam = kwargs["exam"]
     connector = conn_factory or connect_db
     with connector() as conn:
+        query = "SELECT subject, COUNT(*) FROM questions WHERE 1=1"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
         if source_type != "All":
-            rows = conn.execute(
-                "SELECT subject, COUNT(*) FROM questions WHERE source_type = ? GROUP BY subject ORDER BY COUNT(*) DESC",
-                (source_type,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY COUNT(*) DESC"
-            ).fetchall()
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " GROUP BY subject ORDER BY COUNT(*) DESC"
+        rows = conn.execute(query, params).fetchall()
         return {r[0]: int(r[1]) for r in rows if r[0]}
 
 
-def get_difficulty_counts(source_type: str = "All", conn_factory: Any = None) -> Dict[str, int]:
+def get_difficulty_counts(
+    source_type: str = "All",
+    exam: str = "All",
+    conn_factory: Any = None,
+    **kwargs: Any,
+) -> Dict[str, int]:
     """Return question distribution per difficulty using fast indexed group by."""
+    if "source_type" in kwargs:
+        source_type = kwargs["source_type"]
+    if "exam" in kwargs:
+        exam = kwargs["exam"]
     connector = conn_factory or connect_db
     with connector() as conn:
+        query = "SELECT difficulty, COUNT(*) FROM questions WHERE 1=1"
+        params: List[Any] = []
+        if exam != "All":
+            query += " AND exam IN (?, 'Both')"
+            params.append(exam)
         if source_type != "All":
-            rows = conn.execute(
-                "SELECT difficulty, COUNT(*) FROM questions WHERE source_type = ? GROUP BY difficulty",
-                (source_type,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT difficulty, COUNT(*) FROM questions GROUP BY difficulty"
-            ).fetchall()
+            query += " AND source_type = ?"
+            params.append(source_type)
+        query += " GROUP BY difficulty"
+        rows = conn.execute(query, params).fetchall()
         return {r[0]: int(r[1]) for r in rows if r[0]}
 
 
