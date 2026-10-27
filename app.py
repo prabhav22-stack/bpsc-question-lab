@@ -1509,23 +1509,52 @@ def show_question_bank() -> None:
             is_already_uploaded = False
 
             with up_col1:
-                uploaded_pdf = st.file_uploader(
-                    "Upload Mock Test PDF (OCR or Scanned)",
+                uploaded_mock_files = st.file_uploader(
+                    "Upload Mock Test PDF(s) — Single Paper or Batch",
                     type=["pdf"],
+                    accept_multiple_files=True,
                     key="mock_pdf_uploader",
-                    help="Supports multi-page OCR text PDFs and scanned image PDFs. No practical file size limit (up to 2GB).",
+                    help="Supports multi-page OCR text PDFs and scanned image PDFs. Select multiple files to run in a single batch!",
                 )
+
+                is_batch_mock = len(uploaded_mock_files) > 1 if uploaded_mock_files else False
+                dup_handling_mode = "🛡️ Extract only new unique questions (Skip duplicates)"
                 suggested_title = ""
-                if uploaded_pdf is not None:
-                    suggested_title = Path(uploaded_pdf.name).stem.replace("_", " ").title()
-                    pdf_bytes_check = uploaded_pdf.getvalue()
+                mock_test_title = "Uploaded Mock Test"
+
+                if is_batch_mock:
+                    st.info(f"📦 **Batch Mode Active:** **{len(uploaded_mock_files)} Mock Test PDFs** selected.")
+                    batch_mock_rows = []
+                    for idx, f in enumerate(uploaded_mock_files):
+                        f_mb = len(f.getvalue()) / (1024 * 1024)
+                        c_title = Path(f.name).stem.replace("_", " ").title()
+                        batch_mock_rows.append({
+                            "#": idx + 1,
+                            "File Name": f.name,
+                            "Size": f"{f_mb:.1f} MB",
+                            "Auto Mock Title": c_title,
+                        })
+                    st.dataframe(pd.DataFrame(batch_mock_rows), use_container_width=True, hide_index=True)
+
+                    auto_save_mock_batch = st.checkbox(
+                        "⚡ Auto-Save Each Completed Mock Test to Database (Recommended)",
+                        value=True,
+                        help="As each test finishes, automatically deduplicates and saves questions directly to the Mock Database.",
+                        key="mock_batch_auto_save_cb",
+                    )
+                    mock_test_title = f"Batch ({len(uploaded_mock_files)} Mocks)"
+
+                elif uploaded_mock_files and len(uploaded_mock_files) == 1:
+                    single_mock_f = uploaded_mock_files[0]
+                    suggested_title = Path(single_mock_f.name).stem.replace("_", " ").title()
+                    pdf_bytes_check = single_mock_f.getvalue()
                     pdf_file_hash = hashlib.sha256(pdf_bytes_check).hexdigest()
-                    is_already_uploaded, prev_meta = db.is_pdf_already_uploaded(uploaded_pdf.name, pdf_file_hash)
+                    is_already_uploaded, prev_meta = db.is_pdf_already_uploaded(single_mock_f.name, pdf_file_hash)
 
                     if is_already_uploaded and prev_meta:
                         st.warning(
-                            f"⚠️ **Duplicate File Detected:** `'**{uploaded_pdf.name}**'` has already been uploaded previously!\n\n"
-                            f"- **Recorded Mock Title:** `{prev_meta.get('mock_title', uploaded_pdf.name)}`\n"
+                            f"⚠️ **Duplicate File Detected:** `'**{single_mock_f.name}**'` has already been uploaded previously!\n\n"
+                            f"- **Recorded Mock Title:** `{prev_meta.get('mock_title', single_mock_f.name)}`\n"
                             f"- **Uploaded On:** {prev_meta.get('uploaded_at', 'Previously')}\n"
                             f"- **Questions in DB:** {prev_meta.get('questions_count', 0)} question(s)\n\n"
                             "Select how to handle this file to prevent duplicate questions:"
@@ -1540,12 +1569,14 @@ def show_question_bank() -> None:
                             key="pdf_dup_handling_mode",
                         )
 
-                mock_test_title = st.text_input(
-                    "Mock Test Title / Institute Name*",
-                    value=suggested_title or "Drishti IAS BPSC Prelims Mock 01",
-                    placeholder="e.g. Drishti IAS BPSC Prelims Mock 01",
-                    help="This title will be tagged as the source of all extracted questions.",
-                )
+                    mock_test_title = st.text_input(
+                        "Mock Test Title / Institute Name*",
+                        value=suggested_title or "Drishti IAS BPSC Prelims Mock 01",
+                        placeholder="e.g. Drishti IAS BPSC Prelims Mock 01",
+                        help="This title will be tagged as the source of all extracted questions.",
+                    )
+                else:
+                    st.caption("👈 Drag & drop one or more PDF mock tests to begin.")
 
             with up_col2:
                 target_exam_pdf = st.selectbox("Target Exam Syllabus", ["BPSC", "UPSC", "Both"], index=0, key="pdf_target_exam")
@@ -1558,7 +1589,7 @@ def show_question_bank() -> None:
                         "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)",
                         "💻 Local OCR Only (RapidOCR / Pytesseract)",
                     ],
-                    index=0,
+                    index=1 if is_batch_mock else 0,
                     help="For dense scanned Hindi books (like Eduteria, Ghatna Chakra), Auto Cascaded or Gemini Vision with Batch Size 2-4 pages provides the highest character fidelity for Hindi matras and prevents token cut-offs.",
                     key="pdf_ocr_pipeline_choice",
                 )
@@ -1591,12 +1622,13 @@ def show_question_bank() -> None:
                     }
                     pref_engine_code = pref_code_map.get(pref_engine_label, "auto")
 
-                page_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pdf_scope")
                 p_start, p_end = None, None
-                if page_scope == "Custom Page Range":
-                    pr_c1, pr_c2 = st.columns(2)
-                    p_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pdf_p_start")
-                    p_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pdf_p_end")
+                if not is_batch_mock:
+                    page_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pdf_scope")
+                    if page_scope == "Custom Page Range":
+                        pr_c1, pr_c2 = st.columns(2)
+                        p_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pdf_p_start")
+                        p_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pdf_p_end")
 
                 chunk_batch_size = st.slider(
                     "Batch Size (Pages per AI Chunk)",
@@ -1616,39 +1648,68 @@ def show_question_bank() -> None:
                     st.caption("💡 **Tip for Scanned Hindi Books (e.g. Eduteria, Ghatna Chakra):** If each page has 15–25 MCQs, keep Batch Size at **2–3 pages**. If introductory pages (index/theory) have no MCQs, use 'Custom Page Range' to start on the page where practice sets begin.")
 
             is_cancel_selected = dup_handling_mode.startswith("⛔")
+            mock_btn_label = f"🚀 Start Batch Extraction ({len(uploaded_mock_files)} PDFs)" if is_batch_mock else "🚀 Extract, OCR & Sort Mock Questions (Background)"
             extract_clicked = st.button(
-                "🚀 Extract, OCR & Sort Mock Questions (Background)",
+                mock_btn_label,
                 type="primary",
                 use_container_width=True,
-                disabled=(uploaded_pdf is None or is_cancel_selected),
+                disabled=(not uploaded_mock_files or is_cancel_selected),
                 key="btn_run_pdf_extraction",
             )
 
-            if is_cancel_selected and uploaded_pdf is not None:
+            if is_cancel_selected and uploaded_mock_files:
                 st.info("ℹ️ Processing cancelled to prevent duplicate questions. To proceed, select 'Skip questions already in database' or choose another PDF.")
 
-            if extract_clicked and uploaded_pdf is not None and not is_cancel_selected:
+            if extract_clicked and uploaded_mock_files and not is_cancel_selected:
                 if not config.is_gemini_configured():
                     st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & subject classification.")
                 else:
                     st.session_state["extracted_mock_preview"] = None
                     st.session_state["dismissed_ocr_job_id"] = None
-                    pdf_bytes = uploaded_pdf.getvalue()
-                    new_job_id = pdf_extractor.start_background_extraction_job(
-                        pdf_bytes=pdf_bytes,
-                        filename=uploaded_pdf.name,
-                        mock_title=mock_test_title.strip() or "Uploaded Mock Test",
-                        target_exam=target_exam_pdf,
-                        page_start=p_start,
-                        page_end=p_end,
-                        chunk_size=chunk_batch_size,
-                        ocr_strategy=active_ocr_strategy,
-                        preferred_local_engine=pref_engine_code,
-                        translate_hindi=translate_hindi_choice,
-                        job_type="mock",
-                        source_type="Mock question",
-                    )
-                    st.success(f"🚀 Started background OCR extraction for '{uploaded_pdf.name}'! You can safely reload the page or put your computer to sleep.")
+
+                    if is_batch_mock:
+                        batch_files_payload = []
+                        for f in uploaded_mock_files:
+                            m_title = Path(f.name).stem.replace("_", " ").title()
+                            batch_files_payload.append({
+                                "filename": f.name,
+                                "pdf_bytes": f.getvalue(),
+                                "title": m_title,
+                                "source_type": "Mock question",
+                                "exam_edition": f"{m_title} (Mock PDF)",
+                                "exam_year": None,
+                                "paper_set": "",
+                                "answer_key_status": "Extracted & Verified",
+                            })
+                        new_job_id = pdf_extractor.start_background_batch_extraction_job(
+                            pdf_files=batch_files_payload,
+                            target_exam=target_exam_pdf,
+                            chunk_size=chunk_batch_size,
+                            ocr_strategy=active_ocr_strategy,
+                            preferred_local_engine=pref_engine_code,
+                            translate_hindi=translate_hindi_choice,
+                            job_type="mock",
+                            auto_save=auto_save_mock_batch,
+                        )
+                        st.success(f"🚀 Started background batch extraction across {len(uploaded_mock_files)} mock PDFs! Runs continuously in the background.")
+                    else:
+                        single_mock = uploaded_mock_files[0]
+                        pdf_bytes = single_mock.getvalue()
+                        new_job_id = pdf_extractor.start_background_extraction_job(
+                            pdf_bytes=pdf_bytes,
+                            filename=single_mock.name,
+                            mock_title=mock_test_title.strip() or "Uploaded Mock Test",
+                            target_exam=target_exam_pdf,
+                            page_start=p_start,
+                            page_end=p_end,
+                            chunk_size=chunk_batch_size,
+                            ocr_strategy=active_ocr_strategy,
+                            preferred_local_engine=pref_engine_code,
+                            translate_hindi=translate_hindi_choice,
+                            job_type="mock",
+                            source_type="Mock question",
+                        )
+                        st.success(f"🚀 Started background OCR extraction for '{single_mock.name}'! You can safely reload the page or put your computer to sleep.")
                     time.sleep(1)
                     st.rerun()
 
@@ -1658,8 +1719,37 @@ def show_question_bank() -> None:
             ext_questions = prev_info.get("questions", [])
             ext_stats = prev_info.get("stats", {})
 
-            st.markdown("---")
-            st.subheader(f"📊 Extraction Preview: {ext_stats.get('mock_title', 'Mock Test')}")
+            # Batch Completion Summary
+            if ext_stats.get("is_batch"):
+                st.markdown("---")
+                st.subheader(f"📦 Batch Extraction Report: {ext_stats.get('mock_title', 'Multi-Mock Batch')}")
+                b_sum_m = ext_stats.get("batch_summary", [])
+                if b_sum_m:
+                    st.dataframe(pd.DataFrame(b_sum_m), use_container_width=True, hide_index=True)
+
+                tot_ext_m = sum(int(b.get("total_extracted", 0)) for b in b_sum_m)
+                tot_sav_m = sum(int(b.get("saved_unique", 0)) for b in b_sum_m)
+                tot_dup_m = sum(int(b.get("duplicates_skipped", 0)) for b in b_sum_m)
+
+                bkm1, bkm2, bkm3, bkm4 = st.columns(4)
+                bkm1.metric("Mock PDFs Processed", f"{len(b_sum_m)}")
+                bkm2.metric("Total Questions Parsed", f"{tot_ext_m:,}")
+                bkm3.metric("✨ Unique Saved to DB", f"{tot_sav_m:,}")
+                bkm4.metric("🛡️ Duplicates Filtered", f"{tot_dup_m:,}")
+
+                if ext_stats.get("auto_save", True):
+                    st.success(f"🎉 **Batch Extraction Complete!** All **{tot_sav_m:,}** unique mock questions were automatically categorized and saved into your Mock Database!")
+
+                if st.button("Clear / Dismiss Batch Report", type="primary", key="btn_dismiss_mock_batch"):
+                    if ext_stats.get("job_id"):
+                        db.clear_ocr_job(ext_stats["job_id"])
+                        st.session_state["dismissed_ocr_job_id"] = ext_stats["job_id"]
+                    st.session_state["extracted_mock_preview"] = None
+                    st.rerun()
+
+            else:
+                st.markdown("---")
+                st.subheader(f"📊 Extraction Preview: {ext_stats.get('mock_title', 'Mock Test')}")
 
             if not ext_questions:
                 st.warning("No multiple-choice questions were found in the selected pages of this document. Check the page range or ensure the pages contain questions.")
@@ -2150,23 +2240,77 @@ def show_question_bank() -> None:
 
             dup_mode_pyq = "🛡️ Extract only new unique questions (Skip duplicates)"
             with pyq_up_c1:
-                uploaded_pyq_pdf = st.file_uploader(
-                    "Upload PYQ PDF (Official Paper or Book)",
+                uploaded_pyq_files = st.file_uploader(
+                    "Upload PYQ PDF(s) — Single Paper or Multi-Book Batch",
                     type=["pdf"],
+                    accept_multiple_files=True,
                     key="pyq_pdf_uploader",
-                    help="Supports multi-page OCR text PDFs and scanned image PDFs up to 2GB.",
+                    help="Supports multi-page OCR text PDFs and scanned image PDFs up to 2GB each. Select multiple files (e.g. Ghatna Chakra, Eduteria) to process in batch!",
                 )
+
+                is_batch_pyq = len(uploaded_pyq_files) > 1 if uploaded_pyq_files else False
+                dup_mode_pyq = "🛡️ Extract only new unique questions (Skip duplicates)"
                 suggested_pyq_title = ""
-                if uploaded_pyq_pdf is not None:
-                    suggested_pyq_title = Path(uploaded_pyq_pdf.name).stem.replace("_", " ").title()
-                    pyq_bytes_check = uploaded_pyq_pdf.getvalue()
+                target_source_type = "Adjacent PYQ"
+                default_paper_name = ""
+
+                pyq_category_options = [
+                    "📚 Ghatna Chakra PYQ Compendium (History / Geography / Science / Polity / Economy)",
+                    "📚 Eduteria BPSC & Bihar PYQ Compendium",
+                    "🏛️ Official BPSC CCE (Civil Services Prelims)",
+                    "📜 BPSC-Adjacent: CDPO (Child Development Project Officer)",
+                    "📜 BPSC-Adjacent: Bihar Police SI / Daroga",
+                    "📜 BPSC-Adjacent: BPSC Auditor / AAO",
+                    "📜 BPSC-Adjacent: BPSC Assistant / Project Manager",
+                    "📜 BPSC-Adjacent: BPSC TRE (Teacher Recruitment Exam)",
+                    "📜 BPSC-Adjacent: BPSC Judicial Services (Civil Judge)",
+                    "📜 BPSC-Adjacent: BSSC CGL / Inter-Level",
+                    "📜 State PSC Adjacent (UPPSC / JPSC / MPPSC)",
+                    "✏️ Custom Other Exam",
+                ]
+
+                if is_batch_pyq:
+                    st.info(f"📦 **Batch Mode Active:** **{len(uploaded_pyq_files)} PDF books** selected.")
+                    batch_preview_rows = []
+                    for idx, f in enumerate(uploaded_pyq_files):
+                        f_mb = len(f.getvalue()) / (1024 * 1024)
+                        c_title = Path(f.name).stem.replace("_", " ").replace("(", " ").replace(")", " ").title()
+                        batch_preview_rows.append({
+                            "#": idx + 1,
+                            "File Name": f.name,
+                            "Size": f"{f_mb:.1f} MB",
+                            "Auto Edition Title": c_title,
+                        })
+                    st.dataframe(pd.DataFrame(batch_preview_rows), use_container_width=True, hide_index=True)
+
+                    sel_category = st.selectbox("Exam Category / Paper Type*", pyq_category_options, index=0, key="pyq_cat_batch")
+                    if "Official BPSC CCE" in sel_category:
+                        target_source_type = "Official PYQ"
+                    else:
+                        target_source_type = "Adjacent PYQ"
+
+                    auto_save_batch = st.checkbox(
+                        "⚡ Auto-Save Each Completed Book to Database (Recommended)",
+                        value=True,
+                        help="As each book finishes extracting, automatically deduplicates and saves questions directly into the database so you don't need to manually confirm each file.",
+                        key="pyq_auto_save_batch_cb",
+                    )
+                    pyq_paper_title = f"{sel_category.split(':')[0]} Batch"
+                    pyq_year = 2024
+                    pyq_set = ""
+                    pyq_ans_status = "Official Verified Answer Key"
+
+                elif uploaded_pyq_files and len(uploaded_pyq_files) == 1:
+                    single_f = uploaded_pyq_files[0]
+                    suggested_pyq_title = Path(single_f.name).stem.replace("_", " ").title()
+                    pyq_bytes_check = single_f.getvalue()
                     pyq_file_hash = hashlib.sha256(pyq_bytes_check).hexdigest()
-                    is_already_pyq, prev_meta_pyq = db.is_pdf_already_uploaded(uploaded_pyq_pdf.name, pyq_file_hash)
+                    is_already_pyq, prev_meta_pyq = db.is_pdf_already_uploaded(single_f.name, pyq_file_hash)
 
                     if is_already_pyq and prev_meta_pyq:
                         st.warning(
-                            f"⚠️ **Duplicate File Detected:** `'**{uploaded_pyq_pdf.name}**'` has already been uploaded previously!\n\n"
-                            f"- **Title:** `{prev_meta_pyq.get('mock_title', uploaded_pyq_pdf.name)}`\n"
+                            f"⚠️ **Duplicate File Detected:** `'**{single_f.name}**'` has already been uploaded previously!\n\n"
+                            f"- **Title:** `{prev_meta_pyq.get('mock_title', single_f.name)}`\n"
                             f"- **Uploaded On:** {prev_meta_pyq.get('uploaded_at', 'Previously')}\n"
                             f"- **Questions in DB:** {prev_meta_pyq.get('questions_count', 0)} question(s)"
                         )
@@ -2180,47 +2324,38 @@ def show_question_bank() -> None:
                             key="pyq_dup_mode",
                         )
 
-                # Paper Category & Classification
-                pyq_category_options = [
-                    "🏛️ Official BPSC CCE (Civil Services Prelims)",
-                    "📜 BPSC-Adjacent: CDPO (Child Development Project Officer)",
-                    "📜 BPSC-Adjacent: Bihar Police SI / Daroga",
-                    "📜 BPSC-Adjacent: BPSC Auditor / AAO",
-                    "📜 BPSC-Adjacent: BPSC Assistant / Project Manager",
-                    "📜 BPSC-Adjacent: BPSC TRE (Teacher Recruitment Exam)",
-                    "📜 BPSC-Adjacent: BPSC Judicial Services (Civil Judge)",
-                    "📜 BPSC-Adjacent: BSSC CGL / Inter-Level",
-                    "📜 State PSC Adjacent (UPPSC / JPSC / MPPSC)",
-                    "✏️ Custom Other Exam",
-                ]
-                sel_category = st.selectbox("Exam Category / Paper Type*", pyq_category_options, index=0, key="pyq_category_sel")
+                    sel_category = st.selectbox("Exam Category / Paper Type*", pyq_category_options, index=0, key="pyq_category_sel")
+                    if "Official BPSC CCE" in sel_category:
+                        target_source_type = "Official PYQ"
+                        default_paper_name = suggested_pyq_title or "67th BPSC CCE Prelims (2022)"
+                    else:
+                        target_source_type = "Adjacent PYQ"
+                        clean_cat = sel_category.split(":")[-1].split("(")[0].strip()
+                        default_paper_name = suggested_pyq_title or f"{clean_cat} Prelims"
 
-                # Resolve source_type
-                if "Official BPSC CCE" in sel_category:
-                    target_source_type = "Official PYQ"
-                    default_paper_name = suggested_pyq_title or "67th BPSC CCE Prelims (2022)"
+                    pyq_paper_title = st.text_input(
+                        "Exam Edition / Paper Name*",
+                        value=default_paper_name,
+                        placeholder="e.g. BPSC CDPO Prelims 2022, 67th BPSC Re-Exam 2022",
+                        help="Tagged as the official paper edition for attribution.",
+                        key="pyq_paper_title_input",
+                    )
+
+                    meta_c1, meta_c2, meta_c3 = st.columns(3)
+                    pyq_year = meta_c1.number_input("Exam Year (Optional)", min_value=1990, max_value=2030, value=2023, step=1, key="pyq_year_input")
+                    pyq_set = meta_c2.text_input("Paper Set (Optional)", value="", placeholder="e.g. Set A", key="pyq_set_input")
+                    pyq_ans_status = meta_c3.selectbox(
+                        "Answer Key Status",
+                        ["Official Verified Answer Key", "Provisional Key", "Model Key"],
+                        index=0,
+                        key="pyq_ans_status_sel",
+                    )
                 else:
-                    target_source_type = "Adjacent PYQ"
-                    clean_cat = sel_category.split(":")[-1].split("(")[0].strip()
-                    default_paper_name = suggested_pyq_title or f"{clean_cat} Prelims"
-
-                pyq_paper_title = st.text_input(
-                    "Exam Edition / Paper Name*",
-                    value=default_paper_name,
-                    placeholder="e.g. BPSC CDPO Prelims 2022, 67th BPSC Re-Exam 2022",
-                    help="Tagged as the official paper edition for attribution.",
-                    key="pyq_paper_title_input",
-                )
-
-                meta_c1, meta_c2, meta_c3 = st.columns(3)
-                pyq_year = meta_c1.number_input("Exam Year (Optional)", min_value=1990, max_value=2030, value=2023, step=1, key="pyq_year_input")
-                pyq_set = meta_c2.text_input("Paper Set (Optional)", value="", placeholder="e.g. Set A", key="pyq_set_input")
-                pyq_ans_status = meta_c3.selectbox(
-                    "Answer Key Status",
-                    ["Official Verified Answer Key", "Provisional Key", "Model Key"],
-                    index=0,
-                    key="pyq_ans_status_sel",
-                )
+                    st.caption("👈 Drag & drop one or more PDF files to begin.")
+                    pyq_paper_title = "Uploaded PYQ Paper"
+                    pyq_year = 2023
+                    pyq_set = ""
+                    pyq_ans_status = "Official Verified Answer Key"
 
             with pyq_up_c2:
                 target_exam_pyq = st.selectbox("Target Exam Syllabus", ["BPSC", "UPSC", "Both"], index=0, key="pyq_target_exam")
@@ -2228,16 +2363,17 @@ def show_question_bank() -> None:
                     "OCR Processing Pipeline",
                     [
                         "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)",
-                        "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Digital/Standard Mocks)",
+                        "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Large Books/Mocks)",
                         "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)",
                         "💻 Local OCR Only (RapidOCR / Pytesseract)",
                     ],
-                    index=0,
+                    index=1 if is_batch_pyq else 0,
                     key="pyq_ocr_strat",
+                    help="Gemini Native File API is highly recommended for multi-page compendiums (Ghatna Chakra, Eduteria) as it streams directly to Google Tensor Cloud with 0 CPU strain.",
                 )
                 strat_map_pyq = {
                     "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)": "auto",
-                    "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Digital/Standard Mocks)": "gemini_file",
+                    "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Large Books/Mocks)": "gemini_file",
                     "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)": "vision_only",
                     "💻 Local OCR Only (RapidOCR / Pytesseract)": "local_only",
                 }
@@ -2264,12 +2400,13 @@ def show_question_bank() -> None:
                     }
                     pref_eng_pyq = code_map_p.get(pref_eng_label_pyq, "auto")
 
-                pyq_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pyq_scope_radio")
                 p_pyq_start, p_pyq_end = None, None
-                if pyq_scope == "Custom Page Range":
-                    pr_c1, pr_c2 = st.columns(2)
-                    p_pyq_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pyq_p_start")
-                    p_pyq_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pyq_p_end")
+                if not is_batch_pyq:
+                    pyq_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pyq_scope_radio")
+                    if pyq_scope == "Custom Page Range":
+                        pr_c1, pr_c2 = st.columns(2)
+                        p_pyq_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pyq_p_start")
+                        p_pyq_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pyq_p_end")
 
                 pyq_batch_size = st.slider(
                     "Batch Size (Pages per AI Chunk)",
@@ -2287,43 +2424,72 @@ def show_question_bank() -> None:
                 )
 
             is_cancel_pyq = dup_mode_pyq.startswith("⛔")
+            btn_label = f"🚀 Start Batch Extraction ({len(uploaded_pyq_files)} PDFs)" if is_batch_pyq else "🚀 Extract, OCR & Categorize PYQ Paper (Background)"
             extract_pyq_clicked = st.button(
-                "🚀 Extract, OCR & Categorize PYQ Paper (Background)",
+                btn_label,
                 type="primary",
                 use_container_width=True,
-                disabled=(uploaded_pyq_pdf is None or is_cancel_pyq),
+                disabled=(not uploaded_pyq_files or is_cancel_pyq),
                 key="btn_run_pyq_extraction",
             )
 
-            if is_cancel_pyq and uploaded_pyq_pdf is not None:
+            if is_cancel_pyq and uploaded_pyq_files:
                 st.info("ℹ️ Processing cancelled to prevent duplicate questions.")
 
-            if extract_pyq_clicked and uploaded_pyq_pdf is not None and not is_cancel_pyq:
+            if extract_pyq_clicked and uploaded_pyq_files and not is_cancel_pyq:
                 if not config.is_gemini_configured():
                     st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & question extraction.")
                 else:
                     st.session_state["extracted_pyq_preview"] = None
                     st.session_state["dismissed_pyq_job_id"] = None
-                    pdf_bytes_pyq = uploaded_pyq_pdf.getvalue()
-                    new_job_id = pdf_extractor.start_background_extraction_job(
-                        pdf_bytes=pdf_bytes_pyq,
-                        filename=uploaded_pyq_pdf.name,
-                        mock_title=pyq_paper_title.strip() or "Uploaded PYQ Paper",
-                        target_exam=target_exam_pyq,
-                        page_start=p_pyq_start,
-                        page_end=p_pyq_end,
-                        chunk_size=pyq_batch_size,
-                        ocr_strategy=active_strat_pyq,
-                        preferred_local_engine=pref_eng_pyq,
-                        translate_hindi=pyq_translate_hindi,
-                        job_type="pyq",
-                        source_type=target_source_type,
-                        exam_edition=pyq_paper_title.strip() or "Uploaded PYQ Paper",
-                        exam_year=int(pyq_year) if pyq_year else None,
-                        paper_set=pyq_set.strip(),
-                        answer_key_status=pyq_ans_status,
-                    )
-                    st.success(f"🚀 Started background PYQ extraction for '{uploaded_pyq_pdf.name}'! You can safely reload the page or put your computer to sleep.")
+
+                    if is_batch_pyq:
+                        pdf_files_payload = []
+                        for f in uploaded_pyq_files:
+                            c_title = Path(f.name).stem.replace("_", " ").replace("(", " ").replace(")", " ").title()
+                            pdf_files_payload.append({
+                                "filename": f.name,
+                                "pdf_bytes": f.getvalue(),
+                                "title": c_title,
+                                "source_type": target_source_type,
+                                "exam_edition": c_title,
+                                "exam_year": int(pyq_year) if pyq_year else None,
+                                "paper_set": "",
+                                "answer_key_status": "Official Verified Answer Key",
+                            })
+                        new_job_id = pdf_extractor.start_background_batch_extraction_job(
+                            pdf_files=pdf_files_payload,
+                            target_exam=target_exam_pyq,
+                            chunk_size=pyq_batch_size,
+                            ocr_strategy=active_strat_pyq,
+                            preferred_local_engine=pref_eng_pyq,
+                            translate_hindi=pyq_translate_hindi,
+                            job_type="pyq",
+                            auto_save=auto_save_batch,
+                        )
+                        st.success(f"🚀 Started background batch extraction across {len(uploaded_pyq_files)} PDF books! Runs continuously in the background.")
+                    else:
+                        single_f = uploaded_pyq_files[0]
+                        pdf_bytes_pyq = single_f.getvalue()
+                        new_job_id = pdf_extractor.start_background_extraction_job(
+                            pdf_bytes=pdf_bytes_pyq,
+                            filename=single_f.name,
+                            mock_title=pyq_paper_title.strip() or "Uploaded PYQ Paper",
+                            target_exam=target_exam_pyq,
+                            page_start=p_pyq_start,
+                            page_end=p_pyq_end,
+                            chunk_size=pyq_batch_size,
+                            ocr_strategy=active_strat_pyq,
+                            preferred_local_engine=pref_eng_pyq,
+                            translate_hindi=pyq_translate_hindi,
+                            job_type="pyq",
+                            source_type=target_source_type,
+                            exam_edition=pyq_paper_title.strip() or "Uploaded PYQ Paper",
+                            exam_year=int(pyq_year) if pyq_year else None,
+                            paper_set=pyq_set.strip(),
+                            answer_key_status=pyq_ans_status,
+                        )
+                        st.success(f"🚀 Started background PYQ extraction for '{single_f.name}'! You can safely reload the page or put your computer to sleep.")
                     time.sleep(1)
                     st.rerun()
 
@@ -2333,131 +2499,160 @@ def show_question_bank() -> None:
             ext_qs_pyq = prev_info_pyq.get("questions", [])
             ext_stats_pyq = prev_info_pyq.get("stats", {})
 
-            st.markdown("---")
-            st.subheader(f"📊 Extraction Preview: {ext_stats_pyq.get('mock_title', 'PYQ Paper')}")
+            # 1. Dedicated Batch Completion Report
+            if ext_stats_pyq.get("is_batch"):
+                st.markdown("---")
+                st.subheader(f"📦 Batch Extraction Report: {ext_stats_pyq.get('mock_title', 'Multi-PDF Batch')}")
+                b_sum = ext_stats_pyq.get("batch_summary", [])
+                if b_sum:
+                    st.dataframe(pd.DataFrame(b_sum), use_container_width=True, hide_index=True)
 
-            if not ext_qs_pyq:
-                st.warning("No multiple-choice questions were found in the selected pages of this document. Check the page range or ensure the pages contain questions.")
-                if st.button("Clear Preview", key="btn_clear_empty_pyq_prev"):
+                tot_ext = sum(int(b.get("total_extracted", 0)) for b in b_sum)
+                tot_sav = sum(int(b.get("saved_unique", 0)) for b in b_sum)
+                tot_dup = sum(int(b.get("duplicates_skipped", 0)) for b in b_sum)
+
+                bm1, bm2, bm3, bm4 = st.columns(4)
+                bm1.metric("PDFs Processed", f"{len(b_sum)}")
+                bm2.metric("Total Parsed", f"{tot_ext:,}")
+                bm3.metric("✨ Unique Saved", f"{tot_sav:,}")
+                bm4.metric("🛡️ Duplicates Filtered", f"{tot_dup:,}")
+
+                if ext_stats_pyq.get("auto_save", True):
+                    st.success(f"🎉 **Batch Extraction Complete!** All **{tot_sav:,}** unique questions were automatically verified, categorized, and saved into your Question Bank!")
+
+                if st.button("Clear / Dismiss Batch Report", type="primary", key="btn_dismiss_pyq_batch"):
                     if ext_stats_pyq.get("job_id"):
                         db.clear_ocr_job(ext_stats_pyq["job_id"])
                         st.session_state["dismissed_pyq_job_id"] = ext_stats_pyq["job_id"]
                     st.session_state["extracted_pyq_preview"] = None
                     st.rerun()
+
             else:
-                if "unique_qs" not in prev_info_pyq or "duplicate_qs" not in prev_info_pyq:
-                    u_qs, d_qs = db.filter_duplicate_questions(ext_qs_pyq)
-                    prev_info_pyq["unique_qs"] = u_qs
-                    prev_info_pyq["duplicate_qs"] = d_qs
-                unique_qs_pyq = prev_info_pyq["unique_qs"]
-                duplicate_qs_pyq = prev_info_pyq["duplicate_qs"]
+                st.markdown("---")
+                st.subheader(f"📊 Extraction Preview: {ext_stats_pyq.get('mock_title', 'PYQ Paper')}")
 
-                # Telemetry
-                pk1, pk2, pk3, pk4, pk5 = st.columns(5)
-                pk1.metric("Total Questions Parsed", len(ext_qs_pyq))
-                pk2.metric("✨ New Unique Questions", len(unique_qs_pyq), help="Questions not currently in your Question Bank")
-                pk3.metric("🛡️ Duplicates Filtered", len(duplicate_qs_pyq), help="Questions already present in your database")
-                p_strat_pyq = ext_stats_pyq.get("ocr_strategy", "auto")
-                p_label_pyq = "Native File API" if p_strat_pyq == "gemini_file" else p_strat_pyq.replace("_", " ").title()
-                pk4.metric("Pipeline Mode", p_label_pyq)
-                t_saved_pyq = ext_stats_pyq.get("tokens_saved_estimate", 0)
-                pk5.metric("⚡ Est. Tokens Saved", f"~{t_saved_pyq:,}" if t_saved_pyq > 0 else "N/A")
+                if not ext_qs_pyq:
+                    st.warning("No multiple-choice questions were found in the selected pages of this document. Check the page range or ensure the pages contain questions.")
+                    if st.button("Clear Preview", key="btn_clear_empty_pyq_prev"):
+                        if ext_stats_pyq.get("job_id"):
+                            db.clear_ocr_job(ext_stats_pyq["job_id"])
+                            st.session_state["dismissed_pyq_job_id"] = ext_stats_pyq["job_id"]
+                        st.session_state["extracted_pyq_preview"] = None
+                        st.rerun()
+                else:
+                    if "unique_qs" not in prev_info_pyq or "duplicate_qs" not in prev_info_pyq:
+                        u_qs, d_qs = db.filter_duplicate_questions(ext_qs_pyq)
+                        prev_info_pyq["unique_qs"] = u_qs
+                        prev_info_pyq["duplicate_qs"] = d_qs
+                    unique_qs_pyq = prev_info_pyq["unique_qs"]
+                    duplicate_qs_pyq = prev_info_pyq["duplicate_qs"]
 
-                # Telemetry breakdown
-                gfile_p = ext_stats_pyq.get("gemini_file_pages", 0)
-                loc_p = ext_stats_pyq.get("local_ocr_pages", 0)
-                vis_p = ext_stats_pyq.get("vision_fallback_pages", 0)
-                dig_p = ext_stats_pyq.get("digital_text_pages", 0)
-                engs_p = ext_stats_pyq.get("local_engines_used", [])
+                    # Telemetry
+                    pk1, pk2, pk3, pk4, pk5 = st.columns(5)
+                    pk1.metric("Total Questions Parsed", len(ext_qs_pyq))
+                    pk2.metric("✨ New Unique Questions", len(unique_qs_pyq), help="Questions not currently in your Question Bank")
+                    pk3.metric("🛡️ Duplicates Filtered", len(duplicate_qs_pyq), help="Questions already present in your database")
+                    p_strat_pyq = ext_stats_pyq.get("ocr_strategy", "auto")
+                    p_label_pyq = "Native File API" if p_strat_pyq == "gemini_file" else p_strat_pyq.replace("_", " ").title()
+                    pk4.metric("Pipeline Mode", p_label_pyq)
+                    t_saved_pyq = ext_stats_pyq.get("tokens_saved_estimate", 0)
+                    pk5.metric("⚡ Est. Tokens Saved", f"~{t_saved_pyq:,}" if t_saved_pyq > 0 else "N/A")
 
-                tele_items_pyq = []
-                if gfile_p > 0:
-                    tele_items_pyq.append(f"🚀 **{gfile_p} page(s)** processed via **Gemini Native File API**")
-                if loc_p > 0:
-                    tele_items_pyq.append(f"⚡ **{loc_p} page(s)** processed via **Local OCR** ({', '.join(engs_p) if engs_p else 'RapidOCR'})")
-                if dig_p > 0:
-                    tele_items_pyq.append(f"📄 **{dig_p} page(s)** processed via **Digital Text Extraction**")
-                if vis_p > 0:
-                    tele_items_pyq.append(f"👁️ **{vis_p} page(s)** verified via **Gemini Multimodal Vision Fallback**")
-                trans_cnt_pyq = sum(1 for q in ext_qs_pyq if q.get("original_language") == "Hindi" or bool(q.get("original_question_hindi")))
-                if trans_cnt_pyq > 0:
-                    tele_items_pyq.append(f"🌐 **{trans_cnt_pyq} question(s)** translated from **Hindi to English**")
+                    # Telemetry breakdown
+                    gfile_p = ext_stats_pyq.get("gemini_file_pages", 0)
+                    loc_p = ext_stats_pyq.get("local_ocr_pages", 0)
+                    vis_p = ext_stats_pyq.get("vision_fallback_pages", 0)
+                    dig_p = ext_stats_pyq.get("digital_text_pages", 0)
+                    engs_p = ext_stats_pyq.get("local_engines_used", [])
 
-                if tele_items_pyq:
-                    st.caption(" • ".join(tele_items_pyq))
+                    tele_items_pyq = []
+                    if gfile_p > 0:
+                        tele_items_pyq.append(f"🚀 **{gfile_p} page(s)** processed via **Gemini Native File API**")
+                    if loc_p > 0:
+                        tele_items_pyq.append(f"⚡ **{loc_p} page(s)** processed via **Local OCR** ({', '.join(engs_p) if engs_p else 'RapidOCR'})")
+                    if dig_p > 0:
+                        tele_items_pyq.append(f"📄 **{dig_p} page(s)** processed via **Digital Text Extraction**")
+                    if vis_p > 0:
+                        tele_items_pyq.append(f"👁️ **{vis_p} page(s)** verified via **Gemini Multimodal Vision Fallback**")
+                    trans_cnt_pyq = sum(1 for q in ext_qs_pyq if q.get("original_language") == "Hindi" or bool(q.get("original_question_hindi")))
+                    if trans_cnt_pyq > 0:
+                        tele_items_pyq.append(f"🌐 **{trans_cnt_pyq} question(s)** translated from **Hindi to English**")
 
-                if len(duplicate_qs_pyq) > 0:
-                    st.info(f"🛡️ **Deduplication Active:** **{len(duplicate_qs_pyq)}** question(s) already exist in your Question Bank and will NOT be inserted again.")
+                    if tele_items_pyq:
+                        st.caption(" • ".join(tele_items_pyq))
 
-                # Subject sorting distribution
-                st.markdown("#### 🧭 Automatic Subject Distribution (New Unique Questions)")
-                if "u_subj_counts" not in prev_info_pyq:
-                    u_s_pyq: Dict[str, int] = {}
-                    for q in unique_qs_pyq:
-                        s_name = q.get("subject", "Other")
-                        u_s_pyq[s_name] = u_s_pyq.get(s_name, 0) + 1
-                    prev_info_pyq["u_subj_counts"] = u_s_pyq
-                u_subj_counts_pyq = prev_info_pyq["u_subj_counts"]
+                    if len(duplicate_qs_pyq) > 0:
+                        st.info(f"🛡️ **Deduplication Active:** **{len(duplicate_qs_pyq)}** question(s) already exist in your Question Bank and will NOT be inserted again.")
 
-                if u_subj_counts_pyq:
-                    d_cols_pyq = st.columns(min(5, len(u_subj_counts_pyq)))
-                    for d_idx, (s_name, s_count) in enumerate(u_subj_counts_pyq.items()):
-                        d_cols_pyq[d_idx % len(d_cols_pyq)].metric(s_name, f"{s_count} Qs")
-                elif len(unique_qs_pyq) == 0:
-                    st.warning("⚠️ **All questions in this PDF already exist in your Question Bank!** Zero duplicate questions will be inserted.")
+                    # Subject sorting distribution
+                    st.markdown("#### 🧭 Automatic Subject Distribution (New Unique Questions)")
+                    if "u_subj_counts" not in prev_info_pyq:
+                        u_s_pyq: Dict[str, int] = {}
+                        for q in unique_qs_pyq:
+                            s_name = q.get("subject", "Other")
+                            u_s_pyq[s_name] = u_s_pyq.get(s_name, 0) + 1
+                        prev_info_pyq["u_subj_counts"] = u_s_pyq
+                    u_subj_counts_pyq = prev_info_pyq["u_subj_counts"]
 
-                # Preview Table & Cards
-                if unique_qs_pyq:
-                    prev_slice_pyq = unique_qs_pyq[:100]
-                    prev_df_pyq = pd.DataFrame(prev_slice_pyq)
-                    cols_p = ["source_type", "exam_edition", "subject", "topic", "question", "correct_option", "difficulty", "explanation"]
-                    avail_p_cols = [c for c in cols_p if c in prev_df_pyq.columns]
-                    st.dataframe(prev_df_pyq[avail_p_cols], use_container_width=True, hide_index=True)
-                    if len(unique_qs_pyq) > 100:
-                        st.caption(f"⚡ Showing first 100 of {len(unique_qs_pyq):,} extracted questions in preview table. All {len(unique_qs_pyq):,} unique questions will be saved.")
+                    if u_subj_counts_pyq:
+                        d_cols_pyq = st.columns(min(5, len(u_subj_counts_pyq)))
+                        for d_idx, (s_name, s_count) in enumerate(u_subj_counts_pyq.items()):
+                            d_cols_pyq[d_idx % len(d_cols_pyq)].metric(s_name, f"{s_count} Qs")
+                    elif len(unique_qs_pyq) == 0:
+                        st.warning("⚠️ **All questions in this PDF already exist in your Question Bank!** Zero duplicate questions will be inserted.")
 
-                    with st.expander("🔍 Inspect Extracted Question Cards (Paginated)", expanded=False):
-                        ps_size = 10
-                        ps_tot = max(1, (len(unique_qs_pyq) + ps_size - 1) // ps_size)
-                        ps_col1, _ = st.columns([1, 3])
-                        ps_num = ps_col1.number_input(f"Page (1 to {ps_tot})", min_value=1, max_value=ps_tot, value=1, step=1, key="pyq_prev_card_page")
-                        ps_start = (ps_num - 1) * ps_size
-                        for idx, q_dict in enumerate(unique_qs_pyq[ps_start : ps_start + ps_size]):
-                            _render_question_card_view(q_dict, show_actions=False, key_prefix=f"pyq_prev_{ps_start + idx}")
+                    # Preview Table & Cards
+                    if unique_qs_pyq:
+                        prev_slice_pyq = unique_qs_pyq[:100]
+                        prev_df_pyq = pd.DataFrame(prev_slice_pyq)
+                        cols_p = ["source_type", "exam_edition", "subject", "topic", "question", "correct_option", "difficulty", "explanation"]
+                        avail_p_cols = [c for c in cols_p if c in prev_df_pyq.columns]
+                        st.dataframe(prev_df_pyq[avail_p_cols], use_container_width=True, hide_index=True)
+                        if len(unique_qs_pyq) > 100:
+                            st.caption(f"⚡ Showing first 100 of {len(unique_qs_pyq):,} extracted questions in preview table. All {len(unique_qs_pyq):,} unique questions will be saved.")
 
-                # Save or Discard Actions
-                psv_col1, psv_col2 = st.columns([3, 1])
-                btn_save_pyq_text = f"💾 Add {len(unique_qs_pyq):,} Unique Questions to PYQ Vault" if unique_qs_pyq else "💾 No New Questions to Add (All Duplicate)"
-                if psv_col1.button(btn_save_pyq_text, type="primary", use_container_width=True, disabled=len(unique_qs_pyq) == 0, key="btn_save_pyq_to_db"):
-                    if st.session_state.get("pyq_dup_mode", "").startswith("🔄"):
-                        db.delete_adjacent_exam(ext_stats_pyq.get("mock_title", ""))
+                        with st.expander("🔍 Inspect Extracted Question Cards (Paginated)", expanded=False):
+                            ps_size = 10
+                            ps_tot = max(1, (len(unique_qs_pyq) + ps_size - 1) // ps_size)
+                            ps_col1, _ = st.columns([1, 3])
+                            ps_num = ps_col1.number_input(f"Page (1 to {ps_tot})", min_value=1, max_value=ps_tot, value=1, step=1, key="pyq_prev_card_page")
+                            ps_start = (ps_num - 1) * ps_size
+                            for idx, q_dict in enumerate(unique_qs_pyq[ps_start : ps_start + ps_size]):
+                                _render_question_card_view(q_dict, show_actions=False, key_prefix=f"pyq_prev_{ps_start + idx}")
 
-                    with st.spinner(f"Saving {len(unique_qs_pyq):,} questions into your PYQ Vault..."):
-                        saved_pyq_count = db.add_questions_batch(unique_qs_pyq, skip_if_duplicate=False)
+                    # Save or Discard Actions
+                    psv_col1, psv_col2 = st.columns([3, 1])
+                    btn_save_pyq_text = f"💾 Add {len(unique_qs_pyq):,} Unique Questions to PYQ Vault" if unique_qs_pyq else "💾 No New Questions to Add (All Duplicate)"
+                    if psv_col1.button(btn_save_pyq_text, type="primary", use_container_width=True, disabled=len(unique_qs_pyq) == 0, key="btn_save_pyq_to_db"):
+                        if st.session_state.get("pyq_dup_mode", "").startswith("🔄"):
+                            db.delete_adjacent_exam(ext_stats_pyq.get("mock_title", ""))
 
-                    fname_p = ext_stats_pyq.get("filename", ext_stats_pyq.get("mock_title", "pyq.pdf"))
-                    fhash_p = ext_stats_pyq.get("file_hash", "")
-                    fbytes_p = ext_stats_pyq.get("file_bytes_len", 0)
-                    db.record_uploaded_pdf(
-                        filename=fname_p,
-                        file_hash=fhash_p,
-                        mock_title=ext_stats_pyq.get("mock_title", ""),
-                        questions_count=saved_pyq_count,
-                        file_size_bytes=fbytes_p,
-                    )
+                        with st.spinner(f"Saving {len(unique_qs_pyq):,} questions into your PYQ Vault..."):
+                            saved_pyq_count = db.add_questions_batch(unique_qs_pyq, skip_if_duplicate=False)
 
-                    if ext_stats_pyq.get("job_id"):
-                        db.clear_ocr_job(ext_stats_pyq["job_id"])
-                    st.session_state["extracted_pyq_preview"] = None
-                    st.success(f"✨ Successfully added **{saved_pyq_count:,}** unique PYQ questions! (Prevented {len(duplicate_qs_pyq)} duplicates from repeating).")
-                    time.sleep(1)
-                    st.rerun()
+                        fname_p = ext_stats_pyq.get("filename", ext_stats_pyq.get("mock_title", "pyq.pdf"))
+                        fhash_p = ext_stats_pyq.get("file_hash", "")
+                        fbytes_p = ext_stats_pyq.get("file_bytes_len", 0)
+                        db.record_uploaded_pdf(
+                            filename=fname_p,
+                            file_hash=fhash_p,
+                            mock_title=ext_stats_pyq.get("mock_title", ""),
+                            questions_count=saved_pyq_count,
+                            file_size_bytes=fbytes_p,
+                        )
 
-                if psv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_pyq_prev"):
-                    if ext_stats_pyq.get("job_id"):
-                        db.clear_ocr_job(ext_stats_pyq["job_id"])
-                    st.session_state["extracted_pyq_preview"] = None
-                    st.rerun()
+                        if ext_stats_pyq.get("job_id"):
+                            db.clear_ocr_job(ext_stats_pyq["job_id"])
+                        st.session_state["extracted_pyq_preview"] = None
+                        st.success(f"✨ Successfully added **{saved_pyq_count:,}** unique PYQ questions! (Prevented {len(duplicate_qs_pyq)} duplicates from repeating).")
+                        time.sleep(1)
+                        st.rerun()
+
+                    if psv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_pyq_prev"):
+                        if ext_stats_pyq.get("job_id"):
+                            db.clear_ocr_job(ext_stats_pyq["job_id"])
+                        st.session_state["extracted_pyq_preview"] = None
+                        st.rerun()
 
     # =========================================================================
     # Tab 6: All Questions Vault (Unified Browser)

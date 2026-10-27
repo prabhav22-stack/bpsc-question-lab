@@ -359,7 +359,11 @@ def extract_mock_questions_from_pdf(
                         chunk_digital_texts.append(f"--- Page {p_num + 1} ---\n{t.strip()}")
                 combined_digital = "\n\n".join(chunk_digital_texts)
 
-                if len(combined_digital.strip()) >= 60 and ocr_strategy != "vision_only":
+                if (
+                    len(combined_digital.strip()) >= 60
+                    and ocr_engine.evaluate_ocr_quality(combined_digital)
+                    and ocr_strategy != "vision_only"
+                ):
                     # Digital text available and high quality: Direct fast text mode
                     contents_payload = [
                         f"{prompt_instruction}\n\nPAGE CONTENT (Digital PDF Text):\n{combined_digital}"
@@ -646,5 +650,172 @@ def start_background_extraction_job(
                 db.fail_ocr_job(job_id, str(exc))
 
     worker_thread = threading.Thread(target=_worker, daemon=True, name=f"OCRWorker-{job_id}")
+    worker_thread.start()
+    return job_id
+
+
+def start_background_batch_extraction_job(
+    pdf_files: List[Dict[str, Any]],
+    target_exam: str = "BPSC",
+    chunk_size: int = 4,
+    ocr_strategy: str = "auto",
+    preferred_local_engine: str = "auto",
+    translate_hindi: bool = True,
+    job_type: str = "pyq",
+    auto_save: bool = True,
+) -> str:
+    """Launch persistent background batch extraction across multiple PDF documents.
+
+    Processes documents sequentially, optionally auto-saving each completed file
+    with automatic deduplication into the SQLite/PostgreSQL database.
+    """
+    job_id = str(uuid.uuid4())[:12]
+    total_files = len(pdf_files)
+
+    first_title = pdf_files[0]["title"] if pdf_files else "Batch"
+    display_title = f"{first_title} (+{total_files - 1} more PDFs)" if total_files > 1 else first_title
+    first_filename = pdf_files[0]["filename"] if pdf_files else "batch.pdf"
+    display_filename = f"{first_filename} (+{total_files - 1} files)" if total_files > 1 else first_filename
+
+    total_pages_all = 0
+    for f in pdf_files:
+        try:
+            r = pypdf.PdfReader(io.BytesIO(f["pdf_bytes"]))
+            total_pages_all += len(r.pages)
+        except Exception:
+            pass
+
+    db.create_ocr_job(
+        job_id=job_id,
+        filename=display_filename,
+        mock_title=display_title,
+        target_exam=target_exam,
+        total_pages=total_pages_all,
+        job_type=job_type,
+    )
+
+    def _batch_worker():
+        batch_summary: List[Dict[str, Any]] = []
+        all_accumulated_questions: List[Dict[str, Any]] = []
+        total_tokens_saved = 0
+        total_pages_done = 0
+
+        try:
+            def _cancel_check() -> bool:
+                return db.is_ocr_job_cancel_requested(job_id)
+
+            for file_idx, file_item in enumerate(pdf_files):
+                if _cancel_check():
+                    break
+
+                fname = file_item["filename"]
+                fbytes = file_item["pdf_bytes"]
+                ftitle = file_item.get("title") or Path(fname).stem.replace("_", " ").title()
+                f_source_type = file_item.get("source_type", "Adjacent PYQ" if job_type == "pyq" else "Mock question")
+                f_edition = file_item.get("exam_edition") or ftitle
+                f_year = file_item.get("exam_year")
+                f_set = file_item.get("paper_set", "")
+                f_key_status = file_item.get("answer_key_status", "Official Verified Key")
+
+                file_progress_base = file_idx / max(1, total_files)
+                file_progress_slice = 1.0 / max(1, total_files)
+
+                def _batch_incremental(pct: float, msg: str, qs: List[Dict[str, Any]], inter_stats: Dict[str, Any]):
+                    if _cancel_check():
+                        return
+                    overall_pct = min(0.99, file_progress_base + (pct * file_progress_slice))
+                    overall_msg = f"[File {file_idx + 1}/{total_files}: {fname[:24]}] {msg}"
+                    db.update_ocr_job_progress(
+                        job_id=job_id,
+                        progress=overall_pct,
+                        progress_msg=overall_msg,
+                        processed_pages=total_pages_done + inter_stats.get("pages_processed", 0),
+                        extracted_questions=all_accumulated_questions + qs,
+                        stats={
+                            "is_batch": True,
+                            "current_file": fname,
+                            "current_file_idx": file_idx + 1,
+                            "total_files": total_files,
+                            "batch_summary": list(batch_summary),
+                            "tokens_saved_estimate": total_tokens_saved + inter_stats.get("tokens_saved_estimate", 0),
+                        },
+                    )
+
+                file_qs, file_stats = extract_mock_questions_from_pdf(
+                    pdf_bytes=fbytes,
+                    mock_title=ftitle,
+                    target_exam=target_exam,
+                    page_start=None,
+                    page_end=None,
+                    chunk_size=chunk_size,
+                    ocr_strategy=ocr_strategy,
+                    preferred_local_engine=preferred_local_engine,
+                    translate_hindi=translate_hindi,
+                    source_type=f_source_type,
+                    exam_edition=f_edition,
+                    exam_year=f_year,
+                    paper_set=f_set,
+                    answer_key_status=f_key_status,
+                    progress_callback=lambda p, m: _batch_incremental(p, m, [], {}),
+                    cancel_check_fn=_cancel_check,
+                    incremental_callback=_batch_incremental,
+                )
+
+                file_stats["filename"] = fname
+                file_stats["file_bytes_len"] = len(fbytes)
+                total_pages_done += file_stats.get("pages_processed", 0)
+                total_tokens_saved += file_stats.get("tokens_saved_estimate", 0)
+
+                if auto_save:
+                    unique_qs, dup_qs = db.filter_duplicate_questions(file_qs)
+                    saved_count = 0
+                    if unique_qs:
+                        saved_count = db.add_questions_batch(unique_qs, skip_if_duplicate=False)
+                    fhash = hashlib.sha256(fbytes).hexdigest()
+                    db.record_uploaded_pdf(
+                        filename=fname,
+                        file_hash=fhash,
+                        mock_title=ftitle,
+                        questions_count=saved_count,
+                        file_size_bytes=len(fbytes),
+                    )
+                    batch_summary.append({
+                        "filename": fname,
+                        "title": ftitle,
+                        "total_extracted": len(file_qs),
+                        "saved_unique": saved_count,
+                        "duplicates_skipped": len(dup_qs),
+                        "status": "Saved to Database",
+                    })
+                else:
+                    all_accumulated_questions.extend(file_qs)
+                    batch_summary.append({
+                        "filename": fname,
+                        "title": ftitle,
+                        "total_extracted": len(file_qs),
+                        "saved_unique": len(file_qs),
+                        "duplicates_skipped": 0,
+                        "status": "Ready for Preview",
+                    })
+
+            if _cancel_check():
+                return
+
+            final_batch_stats = {
+                "is_batch": True,
+                "mock_title": display_title,
+                "total_files": total_files,
+                "total_pages": total_pages_all,
+                "pages_processed": total_pages_done,
+                "batch_summary": batch_summary,
+                "tokens_saved_estimate": total_tokens_saved,
+                "auto_save": auto_save,
+            }
+            db.complete_ocr_job(job_id, all_accumulated_questions, final_batch_stats)
+        except Exception as exc:
+            if not db.is_ocr_job_cancel_requested(job_id):
+                db.fail_ocr_job(job_id, str(exc))
+
+    worker_thread = threading.Thread(target=_batch_worker, daemon=True, name=f"BatchOCRWorker-{job_id}")
     worker_thread.start()
     return job_id

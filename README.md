@@ -57,6 +57,8 @@ Combines official Google Gemini generative AI, deterministic examination analyti
 7. **BPSC-Adjacent Exam PYQ Bank & Dedicated PYQ OCR Ingestion Pipeline:**
    - **Strict Data Segregation**: Official BPSC CCE PYQs, BPSC-Adjacent PYQs, and Mock Questions are kept strictly separated across storage and UI views to maintain examination authenticity (complying with Rule 4 & 5 of `AGENTS.md`).
    - **Dedicated Adjacent PYQ Vault**: Browse, filter, search, and practice previous year questions specifically from allied examinations:
+     - Ghatna Chakra PYQ Compendiums (History / Geography / Science / Polity / Economy)
+     - Eduteria BPSC & Bihar PYQ Compendiums
      - BPSC CDPO (Child Development Project Officer)
      - Bihar Police SI / Daroga
      - BPSC Auditor & Assistant Audit Officer (AAO)
@@ -65,6 +67,8 @@ Combines official Google Gemini generative AI, deterministic examination analyti
      - BPSC Judicial Services (Civil Judge)
      - BSSC CGL (Bihar Staff Selection Commission)
      - Adjacent State PSCs (UPPSC, JPSC, MPPSC)
+   - **Multi-PDF Batch Queue & Fire-and-Forget Auto-Save**: Upload multiple compendiums/books at once (e.g., 4 Ghatna Chakra subjects or multi-volume sets). Sequential queue processes each file, commits unique questions immediately with background auto-save (`auto_save=True`), filters duplicates, and compiles a comprehensive Batch Telemetry Report.
+   - **Watermark-Resistant OCR & Hindi Heuristics**: Smart watermark bypass filter prevents digital scan footers (Telegram links, copyrights) from erroneously skipping OCR, while Devanagari Hindi markers `(क)-(घ)` ensure 100% extraction accuracy on Hindi compendiums.
    - **Dedicated PYQ OCR Extractor**: Full multi-engine OCR and Gemini Native File API pipeline tailored for authentic past papers with paper set attribution (Set A, B, C, D), exam years, official question numbering, and official verified answer key tracking.
    - **Adjacent Exam Practice Drills**: Launch CBT exam drills targeting only BPSC-Adjacent PYQs or specific allied exam papers.
 

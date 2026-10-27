@@ -319,10 +319,33 @@ def evaluate_ocr_quality(text: str) -> bool:
         "false",
         "governor",
         "revolt",
+        "(क)",
+        "(ख)",
+        "(ग)",
+        "(घ)",
+        "क.",
+        "ख.",
+        "ग.",
+        "घ.",
+        "निम्नलिखित",
+        "कथन",
+        "सत्य",
+        "असत्य",
+        "सही",
+        "गलत",
+        "उत्तर",
+        "प्रश्न",
+        "बिहार",
+        "पटना",
+        "वर्ष",
+        "कौन",
+        "कहाँ",
+        "कब",
+        "किसने",
     ]
     marker_hits = sum(1 for m in mcq_markers if m in clean)
 
-    # Check for option patterns e.g. "(A)", "B.", etc.
-    option_pattern_hits = len(re.findall(r"(?:\([a-d1-4]\)|(?:\b[a-d1-4][\.\)]\s+))", clean))
+    # Check for option patterns e.g. "(A)", "B.", "(क)", etc.
+    option_pattern_hits = len(re.findall(r"(?:\([a-d1-4क-घ]\)|(?:\b[a-d1-4][\.\)]\s+))", clean))
 
     return (marker_hits >= 2) or (option_pattern_hits >= 2)
