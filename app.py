@@ -966,7 +966,7 @@ def show_dashboard() -> None:
     s1, s2 = st.columns(2)
     with s1:
         if config.is_gemini_configured():
-            st.success(f"🤖 Gemini AI: Connected (`{config.get_gemini_model()}`)")
+            st.success(f"🤖 Gemini AI: Connected (`{config.get_gemini_model()}` | Analysis: `{config.get_gemini_analysis_model()}`)")
         else:
             st.warning(
                 "🤖 Gemini AI: Not configured. Set `GEMINI_API_KEY` in `.streamlit/secrets.toml` or `.env`."
@@ -4015,7 +4015,8 @@ def show_performance_coach() -> None:
     """Diagnostic report generator that synthesizes deterministic test metrics and confidence calibration."""
     st.title("🏆 AI Performance Coach")
     st.caption(
-        "Evidence-based diagnostic report evaluating your test history, error taxonomy, and confidence calibration."
+        f"Evidence-based diagnostic report evaluating your test history, error taxonomy, and confidence calibration. "
+        f"Powered by **Gemini Flash Medium** (`{config.get_gemini_analysis_model()}`)."
     )
 
     attempts = db.get_attempts()

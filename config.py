@@ -54,6 +54,14 @@ def get_gemini_model() -> str:
     return _get_setting("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 
+def get_gemini_analysis_model() -> str:
+    """Return configured Gemini model name for in-depth exam analysis and diagnostics.
+
+    Defaults to standard Flash medium ('gemini-3.5-flash') for deeper pedagogical reasoning.
+    """
+    return _get_setting("GEMINI_ANALYSIS_MODEL", "gemini-3.5-flash")
+
+
 def get_supabase_url() -> str:
     """Return configured Supabase project URL."""
     return _get_setting("SUPABASE_URL", "")

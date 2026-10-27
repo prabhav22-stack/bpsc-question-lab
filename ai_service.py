@@ -16,7 +16,12 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import get_gemini_api_key, get_gemini_model, is_gemini_configured
+from config import (
+    get_gemini_analysis_model,
+    get_gemini_api_key,
+    get_gemini_model,
+    is_gemini_configured,
+)
 from prompts import (
     SYSTEM_AI_TUTOR,
     SYSTEM_PERFORMANCE_COACH,
@@ -187,10 +192,11 @@ def diagnose_mistake(
     subject: str = "",
     topic: str = "",
     client_override: Any = None,
+    model_override: Optional[str] = None,
 ) -> MistakeDiagnosis:
-    """Analyze a student mistake and suggest root cause and remediation."""
+    """Analyze a student mistake and suggest root cause and remediation using Flash medium."""
     client = client_override or _get_client()
-    model = get_gemini_model()
+    model = model_override or get_gemini_analysis_model()
 
     prompt = f"""Analyze the student's incorrect attempt on this exam question:
 Subject: {subject}
@@ -285,10 +291,11 @@ def generate_performance_coach_report(
     summary_stats: Dict[str, Any],
     recent_attempts_summary: List[Dict[str, Any]],
     client_override: Any = None,
+    model_override: Optional[str] = None,
 ) -> DiagnosticReport:
-    """Generate an objective, actionable diagnosis of test performance."""
+    """Generate an objective, actionable diagnosis of test performance using Flash medium."""
     client = client_override or _get_client()
-    model = get_gemini_model()
+    model = model_override or get_gemini_analysis_model()
 
     prompt = f"""Review the following deterministic exam metrics and generate a performance diagnostic report:
 
