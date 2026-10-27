@@ -872,7 +872,11 @@ def navigate_to(page_name: str) -> None:
     """Programmatically route to a target navigation view without widget conflicts."""
     if page_name in NAV_PAGES:
         st.session_state["nav_page"] = page_name
-        st.session_state["_nav_radio_widget"] = page_name
+        st.session_state["_pending_nav"] = page_name
+        try:
+            st.session_state["_nav_radio_widget"] = page_name
+        except Exception:
+            pass
         st.rerun()
 
 
@@ -4733,7 +4737,12 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # Handle programmatic redirects
+    # Handle programmatic redirects BEFORE widget instantiation
+    if "_pending_nav" in st.session_state and st.session_state["_pending_nav"] in NAV_PAGES:
+        target_nav = st.session_state.pop("_pending_nav")
+        st.session_state["nav_page"] = target_nav
+        st.session_state["_nav_radio_widget"] = target_nav
+
     default_page = st.session_state.get("nav_page", "Dashboard")
     if default_page not in NAV_PAGES:
         default_page = "Dashboard"
