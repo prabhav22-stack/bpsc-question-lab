@@ -1225,6 +1225,59 @@ def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool
                     except Exception as exc:
                         st.error(f"Translation failed: {exc}")
 
+            if config.is_gemini_configured():
+                with st.expander("✨ AI Learning Tools (Mnemonic Anchor, Deep Dive & Trends)", expanded=False):
+                    ai_t1, ai_t2 = st.columns(2)
+                    if ai_t1.button("🧠 Generate Mnemonic Anchor", key=f"{key_prefix}_mn_{qid}", use_container_width=True):
+                        with st.spinner("Forging mnemonic memory anchor..."):
+                            try:
+                                mn = ai_service.generate_mnemonic_anchor(
+                                    question_text=q["question"],
+                                    options={"A": str(q["option_a"]), "B": str(q["option_b"]), "C": str(q["option_c"]), "D": str(q["option_d"])},
+                                    correct_option=q["correct_option"],
+                                    explanation=str(q.get("explanation", "")),
+                                    subject=str(q.get("subject", "")),
+                                    topic=str(q.get("topic", "")),
+                                )
+                                st.session_state[f"card_mn_{qid}"] = mn.model_dump()
+                            except Exception as exc:
+                                st.error(f"Mnemonic error: {exc}")
+
+                    if ai_t2.button("🔍 High-Yield Deep Dive", key=f"{key_prefix}_dd_{qid}", use_container_width=True):
+                        with st.spinner("Analyzing BPSC trends & related facts..."):
+                            try:
+                                dd = ai_service.generate_question_deep_dive(
+                                    question_text=q["question"],
+                                    options={"A": str(q["option_a"]), "B": str(q["option_b"]), "C": str(q["option_c"]), "D": str(q["option_d"])},
+                                    correct_option=q["correct_option"],
+                                    explanation=str(q.get("explanation", "")),
+                                    subject=str(q.get("subject", "")),
+                                    topic=str(q.get("topic", "")),
+                                )
+                                st.session_state[f"card_dd_{qid}"] = dd.model_dump()
+                            except Exception as exc:
+                                st.error(f"Deep dive error: {exc}")
+
+                    card_mn = st.session_state.get(f"card_mn_{qid}")
+                    if card_mn:
+                        st.markdown(f"**🧠 Mnemonic:** {card_mn.get('mnemonic', '')}")
+                        st.markdown(f"**Core Principle:** {card_mn.get('core_fact')}")
+                        st.markdown(f"**BPSC Trap to Avoid:** {card_mn.get('trap_to_avoid')}")
+                        if card_mn.get("bihar_angle"):
+                            st.markdown(f"**Bihar Connection:** {card_mn.get('bihar_angle')}")
+
+                    card_dd = st.session_state.get(f"card_dd_{qid}")
+                    if card_dd:
+                        st.markdown(f"**BPSC Trend Note:**\n{card_dd.get('bpsc_trend_note')}")
+                        if card_dd.get("high_yield_facts"):
+                            st.markdown("**Key Related Facts:**")
+                            for fact in card_dd["high_yield_facts"]:
+                                st.markdown(f"- {fact}")
+                        if card_dd.get("likely_exam_variations"):
+                            st.markdown("**Upcoming Exam Reframings:**")
+                            for var in card_dd["likely_exam_variations"]:
+                                st.markdown(f"- {var}")
+
 
 def show_question_bank() -> None:
     """Browse, filter, search, upload mock PDFs with AI OCR, and manage questions."""
@@ -3486,6 +3539,61 @@ def show_practice() -> None:
                         st.session_state["tutor_context_question"] = res
                         navigate_to("AI Study Tutor")
 
+                if config.is_gemini_configured():
+                    ai_rev1, ai_rev2 = st.columns(2)
+                    if ai_rev1.button("🧠 AI Mnemonic Anchor", key=f"rev_mn_{idx}_{qid}", use_container_width=True):
+                        with st.spinner("Forging mnemonic anchor..."):
+                            try:
+                                mn = ai_service.generate_mnemonic_anchor(
+                                    question_text=res["question"],
+                                    options=opts_dict,
+                                    correct_option=res["correct_option"],
+                                    explanation=res.get("explanation", ""),
+                                    subject=res["subject"],
+                                    topic=res["topic"],
+                                )
+                                st.session_state[f"rev_mn_disp_{idx}_{qid}"] = mn.model_dump()
+                            except Exception as exc:
+                                st.error(f"Mnemonic error: {exc}")
+
+                    if ai_rev2.button("🔍 AI Exam Deep Dive & Trends", key=f"rev_dd_{idx}_{qid}", use_container_width=True):
+                        with st.spinner("Analyzing BPSC trends and related facts..."):
+                            try:
+                                dd = ai_service.generate_question_deep_dive(
+                                    question_text=res["question"],
+                                    options=opts_dict,
+                                    correct_option=res["correct_option"],
+                                    explanation=res.get("explanation", ""),
+                                    subject=res["subject"],
+                                    topic=res["topic"],
+                                )
+                                st.session_state[f"rev_dd_disp_{idx}_{qid}"] = dd.model_dump()
+                            except Exception as exc:
+                                st.error(f"Deep dive error: {exc}")
+
+                    rev_mn_cached = st.session_state.get(f"rev_mn_disp_{idx}_{qid}")
+                    if rev_mn_cached:
+                        with st.expander(f"🧠 Memory Anchor: {rev_mn_cached.get('mnemonic', '')}", expanded=True):
+                            st.markdown(f"**Core Principle:** {rev_mn_cached.get('core_fact')}")
+                            st.markdown(f"**BPSC Trap to Avoid:** {rev_mn_cached.get('trap_to_avoid')}")
+                            if rev_mn_cached.get("bihar_angle"):
+                                st.markdown(f"**Bihar Connection:** {rev_mn_cached.get('bihar_angle')}")
+
+                    rev_dd_cached = st.session_state.get(f"rev_dd_disp_{idx}_{qid}")
+                    if rev_dd_cached:
+                        with st.expander("🔍 High-Yield Facts & BPSC Trend Intelligence", expanded=True):
+                            st.markdown(f"**BPSC Trend Note:**\n{rev_dd_cached.get('bpsc_trend_note')}")
+                            if rev_dd_cached.get("high_yield_facts"):
+                                st.markdown("**Key Related Facts:**")
+                                for fact in rev_dd_cached["high_yield_facts"]:
+                                    st.markdown(f"- {fact}")
+                            if rev_dd_cached.get("likely_exam_variations"):
+                                st.markdown("**Upcoming Exam Reframings / Variations:**")
+                                for var in rev_dd_cached["likely_exam_variations"]:
+                                    st.markdown(f"- {var}")
+                            if rev_dd_cached.get("related_articles_or_dates"):
+                                st.caption(f"📅 **Key References/Dates:** {rev_dd_cached['related_articles_or_dates']}")
+
         b_new, b_retry = st.columns(2)
         if b_new.button("🚀 Configure Another Test", type="primary", use_container_width=True):
             st.session_state["test_results"] = None
@@ -4241,6 +4349,89 @@ def show_error_notebook() -> None:
                                 except Exception as exc:
                                     st.error(f"Diagnosis failed: {exc}")
 
+                        if config.is_gemini_configured():
+                            ai_c1, ai_c2 = st.columns(2)
+                            if ai_c1.button("🧠 AI Mnemonic Anchor", key=f"ai_mn_{att_id}", use_container_width=True):
+                                with st.spinner("Generating memory anchor..."):
+                                    try:
+                                        mn = ai_service.generate_mnemonic_anchor(
+                                            question_text=row["question"],
+                                            options=opts_map,
+                                            correct_option=row["correct_option"],
+                                            explanation=row.get("explanation", ""),
+                                            subject=row["subject"],
+                                            topic=row["topic"],
+                                        )
+                                        st.session_state[f"mn_disp_{att_id}"] = mn.model_dump()
+                                    except Exception as exc:
+                                        st.error(f"Mnemonic error: {exc}")
+
+                            if ai_c2.button("🎯 AI Drill Me (3 MCQs)", key=f"ai_drill_{att_id}", use_container_width=True):
+                                with st.spinner("Crafting 3-question mastery drill on this weak spot..."):
+                                    try:
+                                        qset = ai_service.generate_targeted_drill_set(
+                                            question_text=row["question"],
+                                            correct_answer=row.get("explanation") or opts_map.get(row["correct_option"], ""),
+                                            topic=row["topic"],
+                                            subject=row["subject"],
+                                            count=3,
+                                        )
+                                        # Save generated drill questions to database as AI Generated
+                                        new_qids = []
+                                        for gq in qset.questions:
+                                            new_id = db.insert_question(
+                                                exam="BPSC",
+                                                subject=gq.subject,
+                                                topic=gq.topic,
+                                                question=gq.question,
+                                                option_a=gq.option_a,
+                                                option_b=gq.option_b,
+                                                option_c=gq.option_c,
+                                                option_d=gq.option_d,
+                                                correct_option=gq.correct_option,
+                                                explanation=gq.explanation,
+                                                source_type="AI-generated practice",
+                                                distractor_notes=gq.distractor_notes,
+                                                concept_tested=gq.concept_tested,
+                                            )
+                                            if new_id:
+                                                new_qids.append(new_id)
+                                        if new_qids:
+                                            st.session_state[f"drill_qids_{att_id}"] = new_qids
+                                            st.success(f"Generated {len(new_qids)} targeted remediation questions!")
+                                    except Exception as exc:
+                                        st.error(f"Drill generation error: {exc}")
+
+                            mn_cached = st.session_state.get(f"mn_disp_{att_id}")
+                            if mn_cached:
+                                with st.expander(f"🧠 Memory Anchor: {mn_cached.get('mnemonic', '')}", expanded=True):
+                                    st.markdown(f"**Core Principle:** {mn_cached.get('core_fact')}")
+                                    st.markdown(f"**BPSC Trap to Avoid:** {mn_cached.get('trap_to_avoid')}")
+                                    if mn_cached.get("bihar_angle"):
+                                        st.markdown(f"**Bihar Connection:** {mn_cached.get('bihar_angle')}")
+
+                            drill_cached = st.session_state.get(f"drill_qids_{att_id}")
+                            if drill_cached:
+                                if st.button(f"🚀 Start 3-Question Remediation Drill Now", key=f"start_drill_{att_id}", type="primary"):
+                                    st.session_state["active_test"] = {
+                                        "session_id": str(uuid.uuid4())[:8],
+                                        "question_ids": drill_cached,
+                                        "exam": "BPSC",
+                                        "test_mode": f"Targeted Remediation: {row['topic']}",
+                                        "ui_style": "Interactive OMR Palette",
+                                        "instant_feedback": True,
+                                        "negative_rate": 0.33,
+                                        "start_time": time.time(),
+                                        "current_index": 0,
+                                        "answers": {},
+                                        "confidences": {},
+                                        "marked_review": [],
+                                        "question_times": {},
+                                        "last_q_timestamp": time.time(),
+                                    }
+                                    st.session_state["test_results"] = None
+                                    navigate_to("Practice & Mock Tests")
+
     # ---------------------------------------------------------
     # TAB 2: Pinned Questions Vault
     # ---------------------------------------------------------
@@ -4342,6 +4533,38 @@ def show_revision_planner() -> None:
         daily_available_minutes=daily_minutes,
         preferred_subjects=preferred_subj,
     )
+
+    if config.is_gemini_configured():
+        ai_plan_col1, ai_plan_col2 = st.columns([3, 1])
+        with ai_plan_col1:
+            st.caption("🤖 Leverage Gemini Flash to synthesize this schedule into an executive daily briefing with subject alerts.")
+        with ai_plan_col2:
+            if st.button("✨ Synthesize AI Strategy", key="synth_ai_strat", type="primary", use_container_width=True):
+                with st.spinner("Gemini is synthesizing your weekly study strategy..."):
+                    try:
+                        err_dist = analytics.compute_error_distribution(attempts)
+                        ov_stats = analytics.compute_overall_metrics(attempts, db.get_test_sessions())
+                        briefing = ai_service.synthesize_weekly_strategy_briefing(
+                            schedule_days=plan,
+                            overall_stats=ov_stats,
+                            error_counts=err_dist,
+                        )
+                        st.session_state["weekly_strategy_briefing"] = briefing.model_dump()
+                    except Exception as exc:
+                        st.error(f"Strategy briefing error: {exc}")
+
+    saved_briefing = st.session_state.get("weekly_strategy_briefing")
+    if saved_briefing:
+        with st.expander("📋 AI Executive Strategic Briefing", expanded=True):
+            st.markdown(f"**Executive Readiness Assessment:**\n\n{saved_briefing['executive_summary']}")
+            if saved_briefing.get("daily_focus_tips"):
+                st.markdown("**🎯 Daily Focus Directives:**")
+                for tip in saved_briefing["daily_focus_tips"]:
+                    st.markdown(f"- {tip}")
+            if saved_briefing.get("neglected_subject_alert"):
+                st.warning(f"⚠️ **Neglected High-Yield Area Alert:** {saved_briefing['neglected_subject_alert']}")
+            if saved_briefing.get("exam_mindset_tip"):
+                st.info(f"🧠 **Exam Psychology & Test-Taking Directive:** {saved_briefing['exam_mindset_tip']}")
 
     st.subheader("7-Day Adaptive Schedule")
     for idx, item in enumerate(plan):

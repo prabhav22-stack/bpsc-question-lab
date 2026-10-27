@@ -274,3 +274,31 @@ class ExtractedMockQuestionSet(BaseModel):
         description="List of all multiple-choice questions parsed from the PDF pages.",
     )
 
+
+class WeeklyStrategyBriefing(BaseModel):
+    """Schema for AI synthesized weekly study strategy."""
+
+    executive_summary: str = Field(..., description="High-level evaluation of current readiness and priority.")
+    daily_focus_tips: List[str] = Field(default_factory=list, description="Actionable recommendations for study days.")
+    neglected_subject_alert: str = Field(default="", description="Subject needing urgent coverage.")
+    exam_mindset_tip: str = Field(..., description="Motivational or psychological test-taking advice.")
+
+
+class MnemonicAnchor(BaseModel):
+    """Schema for AI-generated memory anchors and mnemonics."""
+
+    mnemonic: str = Field(..., description="Catchy acronym, sentence mnemonic, or memory rhyme.")
+    core_fact: str = Field(..., description="The fundamental fact or principle to remember.")
+    trap_to_avoid: str = Field(..., description="The distractor trap BPSC commonly sets.")
+    bihar_angle: str = Field(default="", description="Specific Bihar state relevance if any.")
+
+
+class QuestionDeepDive(BaseModel):
+    """Schema for high-yield exam intelligence on a question."""
+
+    high_yield_facts: List[str] = Field(default_factory=list, description="3-5 critical related syllabus facts.")
+    bpsc_trend_note: str = Field(..., description="Why BPSC tests this topic and recent trends.")
+    likely_exam_variations: List[str] = Field(default_factory=list, description="Ways this topic could appear in future exams.")
+    related_articles_or_dates: str = Field(default="", description="Key constitutional articles, sections, or dates.")
+
+

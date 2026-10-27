@@ -24,9 +24,12 @@ from config import (
 )
 from prompts import (
     SYSTEM_AI_TUTOR,
+    SYSTEM_MNEMONIC_ENGINE,
     SYSTEM_PERFORMANCE_COACH,
+    SYSTEM_QUESTION_DEEPDIVE,
     SYSTEM_QUESTION_STUDIO,
     SYSTEM_SOURCE_RESEARCHER,
+    SYSTEM_WEEKLY_STRATEGY,
     build_question_generation_prompt,
     build_tutor_prompt,
 )
@@ -35,7 +38,10 @@ from schemas import (
     GeneratedQuestion,
     GeneratedQuestionSet,
     MistakeDiagnosis,
+    MnemonicAnchor,
+    QuestionDeepDive,
     ResearchSummary,
+    WeeklyStrategyBriefing,
 )
 
 try:
@@ -449,4 +455,201 @@ def translate_hindi_question_to_english(
         }
     except Exception as exc:
         raise AIServiceError(f"Failed to translate Hindi question: {exc}") from exc
+
+
+def generate_mnemonic_anchor(
+    question_text: str,
+    options: Dict[str, str],
+    correct_option: str,
+    explanation: str = "",
+    subject: str = "",
+    topic: str = "",
+    client_override: Any = None,
+) -> MnemonicAnchor:
+    """Generate high-retention memory pegs and mnemonics for tricky exam facts."""
+    client = client_override or _get_client()
+    model = get_gemini_analysis_model()
+
+    prompt = f"""Create a powerful memory anchor and mnemonic for this BPSC/UPSC exam fact:
+Subject: {subject}
+Topic: {topic}
+Question: {question_text}
+Correct Option: {correct_option}: {options.get(correct_option, '')}
+Explanation: {explanation}
+
+Requirements:
+1. Provide a catchy, highly memorable mnemonic phrase, acronym, or rhyme.
+2. State the undeniable core fact in one clean sentence.
+3. Identify the distractor trap BPSC commonly lays for this.
+4. If applicable, specify any Bihar state angle.
+"""
+    try:
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_MNEMONIC_ENGINE,
+            response_mime_type="application/json",
+            response_schema=MnemonicAnchor,
+            temperature=0.3,
+        )
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=config,
+        )
+        if response.text:
+            return MnemonicAnchor.model_validate_json(response.text)
+        raise AIServiceError("Empty response received from mnemonic generator.")
+    except Exception as exc:
+        raise AIServiceError(f"Mnemonic generation failed: {exc}") from exc
+
+
+def generate_question_deep_dive(
+    question_text: str,
+    options: Dict[str, str],
+    correct_option: str,
+    explanation: str = "",
+    subject: str = "",
+    topic: str = "",
+    client_override: Any = None,
+) -> QuestionDeepDive:
+    """Generate high-yield exam intelligence, related facts, and future BPSC exam variations."""
+    client = client_override or _get_client()
+    model = get_gemini_analysis_model()
+
+    prompt = f"""Provide an in-depth exam intelligence breakdown for this BPSC question:
+Subject: {subject}
+Topic: {topic}
+Question: {question_text}
+Options:
+A: {options.get('A', '')}
+B: {options.get('B', '')}
+C: {options.get('C', '')}
+D: {options.get('D', '')}
+Correct Answer: {correct_option}: {options.get(correct_option, '')}
+Explanation: {explanation}
+
+Deliver:
+1. 3 to 5 critical related syllabus facts frequently asked together in BPSC/UPSC.
+2. A note on BPSC trends regarding this topic.
+3. 2-3 specific ways this topic could be reframed in the 71st CCE or allied exams.
+4. Key constitutional articles, committee names, or chronological dates.
+"""
+    try:
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_QUESTION_DEEPDIVE,
+            response_mime_type="application/json",
+            response_schema=QuestionDeepDive,
+            temperature=0.2,
+        )
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=config,
+        )
+        if response.text:
+            return QuestionDeepDive.model_validate_json(response.text)
+        raise AIServiceError("Empty response received from deep-dive generator.")
+    except Exception as exc:
+        raise AIServiceError(f"Question deep dive failed: {exc}") from exc
+
+
+def generate_targeted_drill_set(
+    question_text: str,
+    correct_answer: str,
+    topic: str,
+    subject: str = "",
+    count: int = 3,
+    client_override: Any = None,
+) -> GeneratedQuestionSet:
+    """Generate targeted practice questions addressing the exact concept of a missed question."""
+    prompt_context = (
+        f"Targeted Remediation Drill.\n"
+        f"The student struggled with this specific question:\n"
+        f"Stem: {question_text}\n"
+        f"Key Concept: {correct_answer}\n"
+        f"Generate {count} new questions that rigorously test the exact same concept or closely adjacent traps "
+        f"to verify if the student has truly mastered this weak spot."
+    )
+    return generate_question_set(
+        exam="BPSC",
+        subject=subject or "Other",
+        topic=topic or "General",
+        count=count,
+        difficulty="Medium",
+        question_type="Standard MCQ",
+        focus="Weak spot remediation drill",
+        notes_or_context=prompt_context,
+        client_override=client_override,
+    )
+
+
+def synthesize_weekly_strategy_briefing(
+    schedule_days: List[Dict[str, Any]],
+    overall_stats: Dict[str, Any],
+    error_counts: Dict[str, int],
+    client_override: Any = None,
+) -> WeeklyStrategyBriefing:
+    """Synthesize the rule-based weekly revision plan into an executive strategic briefing."""
+    client = client_override or _get_client()
+    model = get_gemini_analysis_model()
+
+    prompt = f"""Review the student's 7-day revision schedule and performance metrics:
+Overall Accuracy: {overall_stats.get('accuracy', 0)}% across {overall_stats.get('total_attempts', 0)} attempts.
+Primary Error Taxonomy: {json.dumps(error_counts, indent=2)}
+
+Scheduled 7-Day Plan:
+{json.dumps(schedule_days, indent=2)}
+
+Provide an executive strategic briefing:
+1. Executive summary of study focus and readiness.
+2. 3-5 daily actionable focus tips aligning with the scheduled days.
+3. Alert on any neglected high-yield BPSC subject (e.g. Modern Bihar History, Panchayati Raj, Current Affairs).
+4. A high-impact test-taking psychological tip.
+"""
+    try:
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_WEEKLY_STRATEGY,
+            response_mime_type="application/json",
+            response_schema=WeeklyStrategyBriefing,
+            temperature=0.3,
+        )
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=config,
+        )
+        if response.text:
+            return WeeklyStrategyBriefing.model_validate_json(response.text)
+        raise AIServiceError("Empty response received from strategy synthesizer.")
+    except Exception as exc:
+        raise AIServiceError(f"Strategy synthesis failed: {exc}") from exc
+
+
+def consult_gemini_architect(
+    query: str,
+    context: str = "",
+    client_override: Any = None,
+) -> str:
+    """Consult Gemini Flash as an engineering and syllabus architect for advice or edge cases."""
+    client = client_override or _get_client()
+    model = get_gemini_analysis_model()
+
+    system_inst = (
+        "You are a principal AI software architect and BPSC/UPSC examination technical specialist. "
+        "Provide direct, high-leverage technical guidance, regex strategies, OCR heuristics, or syllabus mappings."
+    )
+    prompt = f"Problem / Architecture Query:\n{query}\n\nContext:\n{context}" if context else query
+
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_inst,
+                temperature=0.2,
+            ),
+        )
+        return response.text or "No response from Gemini architect."
+    except Exception as exc:
+        return f"Gemini architectural consultation unavailable: {exc}"
+
 

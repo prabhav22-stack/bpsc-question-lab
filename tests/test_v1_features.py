@@ -417,6 +417,79 @@ class TestMockedAIService(unittest.TestCase):
             self.assertEqual(res["question"], "Which article of the Indian Constitution provides for the Election Commission?")
             self.assertEqual(res["option_a"], "Article 324")
 
+    def test_mocked_mnemonic_generation(self):
+        """Verify generating memory mnemonics with mocked Gemini client."""
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = json.dumps({
+            "mnemonic": "Shukla Invited Bapu to Champaran (SIBC)",
+            "core_fact": "Raj Kumar Shukla persuaded Mahatma Gandhi to visit Champaran in 1917.",
+            "trap_to_avoid": "Do not confuse Shukla with Dr. Rajendra Prasad who joined the inquiry committee later.",
+            "bihar_angle": "Champaran is located in North-West Bihar (Tirhut Division).",
+        })
+        mock_client.models.generate_content.return_value = mock_resp
+        anchor = ai_service.generate_mnemonic_anchor(
+            question_text="Who invited Gandhi to Champaran?",
+            options={"A": "Raj Kumar Shukla", "B": "Rajendra Prasad"},
+            correct_option="A",
+            client_override=mock_client,
+        )
+        self.assertIn("SIBC", anchor.mnemonic)
+        self.assertIn("Tirhut", anchor.bihar_angle)
+
+    def test_mocked_question_deep_dive(self):
+        """Verify generating question deep dive exam intelligence."""
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = json.dumps({
+            "high_yield_facts": ["Lucknow Pact 1916", "Tinkathia System (3/20th)", "Batak Mian assassination plot foiled"],
+            "bpsc_trend_note": "BPSC asks at least 1 question on Champaran in every CCE Prelims.",
+            "likely_exam_variations": ["Chronology of Gandhi's early satyagrahas: Champaran -> Ahmedabad -> Kheda"],
+            "related_articles_or_dates": "December 1916 (Lucknow Session) -> April 1917 (Motihari arrival)",
+        })
+        mock_client.models.generate_content.return_value = mock_resp
+        dive = ai_service.generate_question_deep_dive(
+            question_text="Who invited Gandhi to Champaran?",
+            options={"A": "Raj Kumar Shukla"},
+            correct_option="A",
+            client_override=mock_client,
+        )
+        self.assertEqual(len(dive.high_yield_facts), 3)
+        self.assertIn("BPSC asks at least 1 question", dive.bpsc_trend_note)
+
+    def test_mocked_weekly_strategy_briefing(self):
+        """Verify weekly study strategy briefing synthesis."""
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = json.dumps({
+            "executive_summary": "Solid accuracy in History, urgent reinforcement needed in General Science.",
+            "daily_focus_tips": ["Monday: Focus on 1857 Bihar revolt leaders", "Tuesday: Revise Fundamental Rights"],
+            "neglected_subject_alert": "General Science has only 2 attempts this week.",
+            "exam_mindset_tip": "Do not rush question stems with 'Not correct' qualifiers.",
+        })
+        mock_client.models.generate_content.return_value = mock_resp
+        briefing = ai_service.synthesize_weekly_strategy_briefing(
+            schedule_days=[{"day_number": 1, "topic": "Modern History"}],
+            overall_stats={"accuracy": 72, "total_attempts": 25},
+            error_counts={"Knowledge gap": 4},
+            client_override=mock_client,
+        )
+        self.assertIn("General Science", briefing.neglected_subject_alert)
+        self.assertEqual(len(briefing.daily_focus_tips), 2)
+
+    def test_consult_gemini_architect(self):
+        """Verify consultative helper for technical queries."""
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = "Recommended approach: Use RapidOCR with text fallback."
+        mock_client.models.generate_content.return_value = mock_resp
+        res = ai_service.consult_gemini_architect(
+            query="Best OCR approach for bilingual scans?",
+            client_override=mock_client,
+        )
+        self.assertIn("RapidOCR", res)
+
+
 
 class TestDatabaseV1Features(unittest.TestCase):
     """Test additive database features using an in-memory SQLite connection."""
