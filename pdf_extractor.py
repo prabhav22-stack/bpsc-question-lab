@@ -188,6 +188,11 @@ def extract_mock_questions_from_pdf(
     ocr_strategy: str = "auto",
     preferred_local_engine: str = "auto",
     translate_hindi: bool = True,
+    source_type: str = "Mock question",
+    exam_edition: Optional[str] = None,
+    exam_year: Optional[int] = None,
+    paper_set: str = "",
+    answer_key_status: str = "Extracted & Verified",
     progress_callback: Optional[Callable[[float, str], None]] = None,
     cancel_check_fn: Optional[Callable[[], bool]] = None,
     incremental_callback: Optional[Callable[[float, str, List[Dict[str, Any]], Dict[str, Any]], None]] = None,
@@ -442,6 +447,12 @@ def extract_mock_questions_from_pdf(
                     seen_stems.add(norm_stem)
 
                     # Prepare database-ready dictionary with complete bilingual provenance
+                    resolved_edition = exam_edition or (
+                        mock_title.strip() if "PYQ" in source_type else f"{mock_title.strip()} (Mock PDF)"
+                    )
+                    default_src_name = "Official PYQ" if source_type == "Official PYQ" else (
+                        "Adjacent PYQ" if source_type == "Adjacent PYQ" else "Uploaded Mock Test"
+                    )
                     q_dict = {
                         "exam": target_exam,
                         "subject": q.subject,
@@ -457,11 +468,13 @@ def extract_mock_questions_from_pdf(
                         "concept_tested": q.concept_tested.strip(),
                         "difficulty": q.difficulty,
                         "question_type": q.question_type,
-                        "source_type": "Mock question",
-                        "source_name": mock_title.strip() or "Uploaded Mock Test",
-                        "exam_edition": f"{mock_title.strip()} (Mock PDF)",
+                        "source_type": source_type,
+                        "source_name": mock_title.strip() or default_src_name,
+                        "exam_edition": resolved_edition,
+                        "exam_year": exam_year,
+                        "paper_set": paper_set.strip(),
                         "is_ai_generated": 0,
-                        "answer_key_status": "Extracted & Verified",
+                        "answer_key_status": answer_key_status or "Extracted & Verified",
                         "original_language": getattr(q, "original_language", "English"),
                         "original_question_hindi": getattr(q, "original_question_hindi", ""),
                     }
@@ -553,6 +566,12 @@ def start_background_extraction_job(
     ocr_strategy: str = "auto",
     preferred_local_engine: str = "auto",
     translate_hindi: bool = True,
+    job_type: str = "mock",
+    source_type: str = "Mock question",
+    exam_edition: Optional[str] = None,
+    exam_year: Optional[int] = None,
+    paper_set: str = "",
+    answer_key_status: str = "Extracted & Verified",
 ) -> str:
     """Launch persistent background OCR extraction thread and return unique job_id.
 
@@ -572,6 +591,7 @@ def start_background_extraction_job(
         mock_title=mock_title,
         target_exam=target_exam,
         total_pages=total_p,
+        job_type=job_type,
     )
 
     def _worker():
@@ -602,6 +622,11 @@ def start_background_extraction_job(
                 ocr_strategy=ocr_strategy,
                 preferred_local_engine=preferred_local_engine,
                 translate_hindi=translate_hindi,
+                source_type=source_type,
+                exam_edition=exam_edition,
+                exam_year=exam_year,
+                paper_set=paper_set,
+                answer_key_status=answer_key_status,
                 progress_callback=lambda pct, msg: db.update_ocr_job_progress(
                     job_id=job_id, progress=pct, progress_msg=msg, processed_pages=0
                 ),

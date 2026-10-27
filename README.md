@@ -38,7 +38,7 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - **Dedicated Mock Questions Bank**: Browse, filter, search, and practice third-party test series questions and mock exams with distinct provenance tracking.
    - **Gemini Native File API Pipeline (`client.files.upload`)**: Ultra-fast direct document understanding that streams raw PDF chunks directly to Google Tensor Cloud. Extracts, translates, and structures 50+ MCQs in ~20–30 seconds with 0 local CPU load or memory strain, automatically deleting temporary files from Google servers upon completion.
    - **Multi-Engine Local OCR Cascade Subsystem (`ocr_engine.py`)**: Supports **RapidOCR** (high-speed ONNX runtime port of PaddleOCR), **PaddleOCR** (Baidu deep learning engine), and **Pytesseract** (Google Tesseract OCR) to process scanned PDF pages locally before querying Gemini.
-   - **Persistent Background OCR Engine (`ocr_jobs`)**: Operates on a dedicated background worker decoupled from the frontend browser tab. Extraction continues seamlessly across browser reloads, inactive sessions, or computer sleep.
+   - **Persistent Background OCR Engine (`ocr_jobs`)**: Operates on a dedicated background worker decoupled from the frontend browser tab. Extraction continues seamlessly across browser reloads, inactive sessions, or computer sleep, with strict segregation between mock and PYQ extraction jobs.
    - **Interactive Live Progress Bar & Cancellation Action**: Real-time progress bar tracking batch status with a dedicated **"⏹️ Cancel Extraction"** button that halts processing immediately on demand.
    - **High-Speed Parallel Processing & Image Optimization**: Oversized scan pages (>1600px) are automatically optimized and converted to grayscale, and processed in parallel across CPU cores using `concurrent.futures.ThreadPoolExecutor` for a 3-5x throughput boost.
    - **~85% API Token Reduction & Quota Optimization**: Extracted local OCR text is sent to Gemini in high-speed text-only structured categorization mode, bypassing heavy image vision tokens and significantly speeding up batch extraction.
@@ -54,7 +54,21 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - **No Upload File Size Limit**: Configured for high-capacity files up to 2GB with streaming chunk processing.
    - **Direct Practice Drills**: Launch mock test simulation drills directly from the Mock Questions Bank or practice mode.
 
-7. **Cloud-First Architecture & Dual Mode:**
+7. **BPSC-Adjacent Exam PYQ Bank & Dedicated PYQ OCR Ingestion Pipeline:**
+   - **Strict Data Segregation**: Official BPSC CCE PYQs, BPSC-Adjacent PYQs, and Mock Questions are kept strictly separated across storage and UI views to maintain examination authenticity (complying with Rule 4 & 5 of `AGENTS.md`).
+   - **Dedicated Adjacent PYQ Vault**: Browse, filter, search, and practice previous year questions specifically from allied examinations:
+     - BPSC CDPO (Child Development Project Officer)
+     - Bihar Police SI / Daroga
+     - BPSC Auditor & Assistant Audit Officer (AAO)
+     - BPSC Assistant & Project Manager
+     - BPSC TRE (Teacher Recruitment Examination)
+     - BPSC Judicial Services (Civil Judge)
+     - BSSC CGL (Bihar Staff Selection Commission)
+     - Adjacent State PSCs (UPPSC, JPSC, MPPSC)
+   - **Dedicated PYQ OCR Extractor**: Full multi-engine OCR and Gemini Native File API pipeline tailored for authentic past papers with paper set attribution (Set A, B, C, D), exam years, official question numbering, and official verified answer key tracking.
+   - **Adjacent Exam Practice Drills**: Launch CBT exam drills targeting only BPSC-Adjacent PYQs or specific allied exam papers.
+
+8. **Cloud-First Architecture & Dual Mode:**
    - Operates offline in local SQLite (`question_lab.db`).
    - GitHub Actions keep-alive workflow (`.github/workflows/keep_alive.yml`) to keep cloud instances active.
    - Seamlessly connects to Supabase PostgreSQL & Supabase Auth when configured.
@@ -85,7 +99,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 61 tests (19 legacy regression tests + 24 v1.0 feature tests + 18 mock questions, background OCR, Gemini Native File API, deduplication, translation & PDF extractor tests):
+Run all 63 tests (19 legacy regression tests + 24 v1.0 feature tests + 20 mock questions, background OCR, Gemini Native File API, adjacent PYQ segregation, deduplication, translation & PDF extractor tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

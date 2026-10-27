@@ -649,6 +649,13 @@ def inject_custom_css() -> None:
         box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
     }
 
+    .badge-adjacent {
+        background-color: rgba(6, 182, 212, 0.14);
+        color: #06b6d4;
+        border: 1px solid rgba(6, 182, 212, 0.35);
+        box-shadow: 0 0 10px rgba(6, 182, 212, 0.15);
+    }
+
     .badge-mock {
         background-color: rgba(245, 158, 11, 0.14);
         color: #f59e0b;
@@ -1104,6 +1111,9 @@ def _render_question_card_view(q: pd.Series | Dict[str, Any], show_actions: bool
     if stype == "Official PYQ":
         badge = "🏛️ Official Verified PYQ"
         b_cls = "badge-pyq"
+    elif stype == "Adjacent PYQ":
+        badge = "📜 BPSC-Adjacent PYQ"
+        b_cls = "badge-adjacent"
     elif stype == "Mock question":
         badge = "📝 Mock Question"
         b_cls = "badge-mock"
@@ -1217,10 +1227,12 @@ def show_question_bank() -> None:
     st.title("📖 Question Bank & Mock Test Architecture")
     st.caption("Organized repository for Official PYQs, Extracted Mock Tests, AI Practice Drills, and PDF OCR extractions.")
 
-    tab_mocks, tab_upload_pdf, tab_pyqs, tab_all, tab_add_csv = st.tabs([
+    tab_mocks, tab_upload_pdf, tab_pyqs, tab_adj_pyqs, tab_upload_pyq, tab_all, tab_add_csv = st.tabs([
         "📝 Mock Questions Bank",
-        "📄 Upload Mock PDF & OCR Extractor",
-        "🏛️ 10-Year Official PYQ Bank",
+        "📄 Upload Mock PDF & OCR",
+        "🏛️ Official BPSC PYQ Vault",
+        "📜 BPSC-Adjacent PYQ Bank",
+        "📑 Upload PYQ / Adjacent PDF",
         "🔍 All Questions Vault",
         "➕ Add Manually & CSV Import",
     ])
@@ -1416,8 +1428,8 @@ def show_question_bank() -> None:
         )
 
         # Check for active background job or restored completed job
-        active_bg_job = db.get_active_ocr_job()
-        latest_bg_job = db.get_latest_completed_or_active_job()
+        active_bg_job = db.get_active_ocr_job(job_type="mock")
+        latest_bg_job = db.get_latest_completed_or_active_job(job_type="mock")
 
         # If a background job just completed and user hasn't previewed it yet, restore it
         if st.session_state.get("extracted_mock_preview") is None and latest_bg_job and latest_bg_job["status"] == "completed":
@@ -1629,6 +1641,8 @@ def show_question_bank() -> None:
                         ocr_strategy=active_ocr_strategy,
                         preferred_local_engine=pref_engine_code,
                         translate_hindi=translate_hindi_choice,
+                        job_type="mock",
+                        source_type="Mock question",
                     )
                     st.success(f"🚀 Started background OCR extraction for '{uploaded_pdf.name}'! You can safely reload the page or put your computer to sleep.")
                     time.sleep(1)
@@ -1895,7 +1909,554 @@ def show_question_bank() -> None:
             st.info("No Official PYQs loaded in database.")
 
     # =========================================================================
-    # Tab 4: All Questions Vault (Unified Browser)
+    # Tab 4: BPSC-Adjacent PYQ Bank (Dedicated Adjacent Exam Section)
+    # =========================================================================
+    with tab_adj_pyqs:
+        adj_subset = db.list_questions(source_type="Adjacent PYQ")
+        st.subheader(f"📜 BPSC-Adjacent Exam PYQ Vault ({len(adj_subset)} Authentic Questions)")
+        st.write("Browse and filter authentic questions from BPSC-adjacent examinations (BPSC CDPO, Bihar Police SI / Daroga, BPSC Auditor, Assistant, BSSC CGL, etc.).")
+
+        if adj_subset.empty:
+            st.info(
+                "ℹ️ **No BPSC-Adjacent PYQs in the database yet.**\n\n"
+                "You can upload official previous year question papers from exams like **BPSC CDPO, Bihar Police SI / Daroga, "
+                "BPSC Auditor, Assistant, BPSC TRE, or BSSC CGL** in the **'📑 Upload PYQ / Adjacent PDF'** tab.\n\n"
+                "Antigravity AI will extract all questions, identify verified answer keys, translate Hindi stems to English, "
+                "and organize them separately into this vault!"
+            )
+        else:
+            adj_names = ["All Adjacent Exam Papers"] + sorted([n for n in adj_subset["source_name"].dropna().unique().tolist() if n.strip()])
+            adj_subjs = ["All"] + sorted([s for s in adj_subset["subject"].dropna().unique().tolist() if s.strip()])
+            diff_counts_adj = adj_subset["difficulty"].value_counts().to_dict()
+
+            # KPI metrics
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Adjacent PYQs", f"{len(adj_subset):,}")
+            a2.metric("Exam Papers Covered", max(0, len(adj_names) - 1))
+            a3.metric("Subjects Covered", max(0, len(adj_subjs) - 1))
+            a4.metric("Medium / Hard", f"{diff_counts_adj.get('Medium', 0)} / {diff_counts_adj.get('Hard', 0)}")
+
+            # Paper / Exam Breakdown Chips
+            paper_counts = adj_subset["source_name"].value_counts().to_dict()
+            if paper_counts:
+                st.markdown("##### 🧭 Papers in Adjacent Vault")
+                p_cols = st.columns(min(5, len(paper_counts) or 1))
+                for idx, (p_name, p_val) in enumerate(paper_counts.items()):
+                    p_cols[idx % len(p_cols)].metric(p_name[:24], f"{p_val} Qs")
+                st.divider()
+
+            # Filter Controls
+            af1, af2, af3, af4, af5 = st.columns([1.5, 1.2, 1.2, 1.0, 1.5])
+            selected_adj_paper = af1.selectbox("Exam Paper", adj_names, key="adj_filter_paper")
+            selected_adj_subject = af2.selectbox("Subject", adj_subjs, key="adj_filter_subj")
+
+            interim_adj = adj_subset if selected_adj_subject == "All" else adj_subset[adj_subset["subject"] == selected_adj_subject]
+            adj_topics = ["All"] + sorted([t for t in interim_adj["topic"].dropna().unique().tolist() if t.strip()])
+            selected_adj_topic = af3.selectbox("Topic", adj_topics, key="adj_filter_topic")
+
+            selected_adj_diff = af4.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="adj_filter_diff")
+            search_adj_kw = af5.text_input("Search Adjacent PYQs", placeholder="e.g. Directive Principles, Bihar...", key="adj_kw")
+
+            f_adj = adj_subset.copy()
+            if selected_adj_paper != "All Adjacent Exam Papers":
+                f_adj = f_adj[f_adj["source_name"] == selected_adj_paper]
+            if selected_adj_subject != "All":
+                f_adj = f_adj[f_adj["subject"] == selected_adj_subject]
+            if selected_adj_topic != "All":
+                f_adj = f_adj[f_adj["topic"] == selected_adj_topic]
+            if selected_adj_diff != "All":
+                f_adj = f_adj[f_adj["difficulty"] == selected_adj_diff]
+            if search_adj_kw.strip():
+                kw_a = search_adj_kw.strip().lower()
+                f_adj = f_adj[
+                    f_adj["question"].str.lower().str.contains(kw_a, na=False)
+                    | f_adj["topic"].str.lower().str.contains(kw_a, na=False)
+                    | f_adj["explanation"].str.lower().str.contains(kw_a, na=False)
+                ]
+
+            adj_act1, adj_act2 = st.columns([3, 1])
+            adj_act1.caption(f"Showing **{len(f_adj)}** adjacent PYQ(s).")
+            if not f_adj.empty and adj_act2.button("🎯 Practice Filtered Adjacent PYQs", type="primary", use_container_width=True, key="btn_adj_drill"):
+                a_ids = f_adj["id"].astype(int).tolist()
+                chosen_a = random.sample(a_ids, k=min(25, len(a_ids)))
+                st.session_state["active_test"] = {
+                    "session_id": str(uuid.uuid4())[:8],
+                    "question_ids": chosen_a,
+                    "exam": "BPSC",
+                    "test_mode": f"Adjacent PYQ Drill ({selected_adj_paper if selected_adj_paper != 'All Adjacent Exam Papers' else 'All Adjacent Papers'})",
+                    "ui_style": "Interactive OMR Palette",
+                    "instant_feedback": True,
+                    "negative_rate": 0.33,
+                    "start_time": time.time(),
+                    "current_index": 0,
+                    "answers": {},
+                    "confidences": {},
+                    "marked_review": [],
+                    "question_times": {},
+                    "last_q_timestamp": time.time(),
+                }
+                st.session_state["test_results"] = None
+                navigate_to("Practice & Mock Tests")
+
+            # Dataframe & Cards
+            disp_adj_cols = ["id", "source_name", "exam_edition", "exam_year", "paper_set", "subject", "topic", "question", "correct_option", "difficulty", "answer_key_status"]
+            avail_adj_cols = [c for c in disp_adj_cols if c in f_adj.columns]
+            st.dataframe(f_adj[avail_adj_cols].head(150), use_container_width=True, hide_index=True)
+            if len(f_adj) > 150:
+                st.caption(f"⚡ Showing first 150 rows in the preview grid. Browse all {len(f_adj)} questions via the cards below.")
+
+            with st.expander("🔍 Browse Adjacent PYQ Cards (Paginated)", expanded=True):
+                if f_adj.empty:
+                    st.info("No Adjacent PYQs match the current filters.")
+                else:
+                    adj_page_size = 10
+                    adj_total_pages = max(1, (len(f_adj) + adj_page_size - 1) // adj_page_size)
+                    adjp_col1, _ = st.columns([1, 3])
+                    adj_page_num = adjp_col1.number_input(
+                        f"Page (1 to {adj_total_pages})", min_value=1, max_value=adj_total_pages, value=1, step=1, key="adj_page_ctrl"
+                    )
+                    adj_start_idx = (adj_page_num - 1) * adj_page_size
+                    adj_slice = f_adj.iloc[adj_start_idx : adj_start_idx + adj_page_size]
+
+                    for _, q_row in adj_slice.iterrows():
+                        _render_question_card_view(q_row, show_actions=True, key_prefix="adj_bank")
+
+            # Manage / Delete Uploaded Adjacent Papers Expander
+            with st.expander("⚙️ Manage & Delete Uploaded Adjacent Exam Batches", expanded=False):
+                st.caption("Safely purge an uploaded adjacent examination paper if you wish to re-upload or clear obsolete papers.")
+                del_adj_names = db.get_adjacent_exam_names()
+                if not del_adj_names:
+                    st.write("No uploaded adjacent exam batches available.")
+                else:
+                    dela_col1, dela_col2 = st.columns([3, 1])
+                    to_delete_adj = dela_col1.selectbox("Select Adjacent Exam Paper to Delete", del_adj_names, key="sel_del_adj")
+                    if dela_col2.button("🗑️ Delete Adjacent Paper", type="secondary", key="btn_del_adj"):
+                        deleted_cnt = db.delete_adjacent_exam(to_delete_adj)
+                        st.success(f"Deleted {deleted_cnt} question(s) associated with '{to_delete_adj}'.")
+                        st.rerun()
+
+    # =========================================================================
+    # Tab 5: Upload PYQ & Adjacent Exam PDF (OCR Extractor Pipeline)
+    # =========================================================================
+    with tab_upload_pyq:
+        st.subheader("📑 Upload PYQ & Adjacent Exam PDF (Automated AI OCR Extractor)")
+        st.write(
+            "Upload authentic previous year question papers from **Official BPSC CCE Prelims** or **BPSC-Adjacent Exams** "
+            "(BPSC CDPO, Bihar Police SI / Daroga, BPSC Auditor, Assistant, BPSC TRE, BSSC CGL, UPPSC, etc.). "
+            "Antigravity AI extracts all bilingual MCQs, identifies verified answer keys, translates Hindi to English, and tags exact provenance."
+        )
+
+        # Multi-Engine OCR Detection & Status Badges
+        avail_ocr_subsystems_pyq = ocr_engine.get_available_ocr_engines()
+        ocr_badges_pyq = []
+        for eng in avail_ocr_subsystems_pyq:
+            if eng["available"]:
+                ocr_badges_pyq.append(
+                    f"<span class='lab-badge' style='background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.35); font-weight: 600;'>✅ {eng['name']}</span>"
+                )
+            else:
+                ocr_badges_pyq.append(
+                    f"<span class='lab-badge' style='background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25);'>⚪ {eng['name']} (Standby)</span>"
+                )
+
+        st.markdown(
+            f"""
+            <div style="background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+                <div style="font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 1.1rem;">⚡</span> Dedicated PYQ OCR Engine & Provenance Pipeline
+                </div>
+                <div style="font-size: 0.88rem; color: #cbd5e1; margin-bottom: 8px;">
+                    Preserves authentic question numbering, paper sets, exam years, and bilingual provenance.
+                    Runs continuously in background thread without tab interruptions.
+                </div>
+                <div><b>Active OCR Engines:</b> {' '.join(ocr_badges_pyq)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Check for active background job or restored completed job
+        active_pyq_job = db.get_active_ocr_job(job_type="pyq")
+        latest_pyq_job = db.get_latest_completed_or_active_job(job_type="pyq")
+
+        # If a background job just completed and user hasn't previewed it yet, restore it
+        if st.session_state.get("extracted_pyq_preview") is None and latest_pyq_job and latest_pyq_job["status"] == "completed":
+            if st.session_state.get("dismissed_pyq_job_id") != latest_pyq_job["job_id"]:
+                job_stats_p = latest_pyq_job.get("stats", {})
+                job_stats_p["job_id"] = latest_pyq_job["job_id"]
+                st.session_state["extracted_pyq_preview"] = {
+                    "questions": latest_pyq_job.get("extracted_questions", []),
+                    "stats": job_stats_p,
+                }
+
+        # 1. If a job is currently RUNNING in background: show live progress panel & CANCEL button
+        if active_pyq_job is not None:
+            st.markdown(
+                f"""
+                <div style="background: rgba(6, 182, 212, 0.08); border: 2px solid rgba(6, 182, 212, 0.4); border-radius: 10px; padding: 18px 22px; margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="font-size: 1.15rem; font-weight: 700; color: #38bdf8;">
+                            ⚙️ Background PYQ OCR in Progress: {active_pyq_job['mock_title']}
+                        </div>
+                        <span class="lab-badge" style="background: rgba(6, 182, 212, 0.2); color: #7dd3fc; border: 1px solid rgba(6, 182, 212, 0.4);">
+                            EXTRACTING PYQs IN BACKGROUND
+                        </span>
+                    </div>
+                    <div style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 4px;">
+                        🛡️ <b>Sleep & Reload Resilient:</b> You can safely reload the page, close this tab, or put your computer to sleep.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Live progress bar and page metrics
+            curr_progress_pyq = max(0.02, min(1.0, float(active_pyq_job.get("progress", 0.05))))
+            st.progress(curr_progress_pyq)
+
+            p_col1, p_col2 = st.columns([3, 1])
+            p_col1.write(f"⏳ **Status:** {active_pyq_job.get('progress_msg', 'Processing PYQ pages...')}")
+
+            if p_col2.button("⏹️ Cancel PYQ Extraction", type="secondary", use_container_width=True, key="btn_cancel_pyq_ocr"):
+                db.request_cancel_ocr_job(active_pyq_job["job_id"])
+                st.warning("Cancellation requested. Halting background extraction...")
+                time.sleep(1)
+                st.rerun()
+
+            time.sleep(2)
+            st.rerun()
+
+        elif latest_pyq_job and latest_pyq_job["status"] == "cancelled" and st.session_state.get("dismissed_pyq_job_id") != latest_pyq_job["job_id"]:
+            st.warning(f"⚠️ Extraction of **'{latest_pyq_job['mock_title']}'** was cancelled by user.")
+            if st.button("Dismiss & Start New PYQ Upload", key="btn_dismiss_cancelled_pyq"):
+                db.clear_ocr_job(latest_pyq_job["job_id"])
+                st.session_state["dismissed_pyq_job_id"] = latest_pyq_job["job_id"]
+                st.rerun()
+
+        elif latest_pyq_job and latest_pyq_job["status"] == "failed" and st.session_state.get("dismissed_pyq_job_id") != latest_pyq_job["job_id"]:
+            st.error(f"❌ Extraction error on **'{latest_pyq_job['mock_title']}'**: {latest_pyq_job.get('error_msg', 'Unknown error')}")
+            if st.button("Dismiss & Try Again", key="btn_dismiss_failed_pyq"):
+                db.clear_ocr_job(latest_pyq_job["job_id"])
+                st.session_state["dismissed_pyq_job_id"] = latest_pyq_job["job_id"]
+                st.rerun()
+
+        # Normal PYQ PDF Upload Form
+        if active_pyq_job is None:
+            pyq_up_c1, pyq_up_c2 = st.columns([3, 2])
+
+            dup_mode_pyq = "🛡️ Extract only new unique questions (Skip duplicates)"
+            with pyq_up_c1:
+                uploaded_pyq_pdf = st.file_uploader(
+                    "Upload PYQ PDF (Official Paper or Book)",
+                    type=["pdf"],
+                    key="pyq_pdf_uploader",
+                    help="Supports multi-page OCR text PDFs and scanned image PDFs up to 2GB.",
+                )
+                suggested_pyq_title = ""
+                if uploaded_pyq_pdf is not None:
+                    suggested_pyq_title = Path(uploaded_pyq_pdf.name).stem.replace("_", " ").title()
+                    pyq_bytes_check = uploaded_pyq_pdf.getvalue()
+                    pyq_file_hash = hashlib.sha256(pyq_bytes_check).hexdigest()
+                    is_already_pyq, prev_meta_pyq = db.is_pdf_already_uploaded(uploaded_pyq_pdf.name, pyq_file_hash)
+
+                    if is_already_pyq and prev_meta_pyq:
+                        st.warning(
+                            f"⚠️ **Duplicate File Detected:** `'**{uploaded_pyq_pdf.name}**'` has already been uploaded previously!\n\n"
+                            f"- **Title:** `{prev_meta_pyq.get('mock_title', uploaded_pyq_pdf.name)}`\n"
+                            f"- **Uploaded On:** {prev_meta_pyq.get('uploaded_at', 'Previously')}\n"
+                            f"- **Questions in DB:** {prev_meta_pyq.get('questions_count', 0)} question(s)"
+                        )
+                        dup_mode_pyq = st.radio(
+                            "Duplicate Handling",
+                            [
+                                "🛡️ Extract only new unique questions (Skip questions already in database)",
+                                "🔄 Re-extract & Replace existing paper (Purge older questions from this paper and refresh)",
+                                "⛔ Cancel processing (Do not extract to avoid duplicate questions)",
+                            ],
+                            key="pyq_dup_mode",
+                        )
+
+                # Paper Category & Classification
+                pyq_category_options = [
+                    "🏛️ Official BPSC CCE (Civil Services Prelims)",
+                    "📜 BPSC-Adjacent: CDPO (Child Development Project Officer)",
+                    "📜 BPSC-Adjacent: Bihar Police SI / Daroga",
+                    "📜 BPSC-Adjacent: BPSC Auditor / AAO",
+                    "📜 BPSC-Adjacent: BPSC Assistant / Project Manager",
+                    "📜 BPSC-Adjacent: BPSC TRE (Teacher Recruitment Exam)",
+                    "📜 BPSC-Adjacent: BPSC Judicial Services (Civil Judge)",
+                    "📜 BPSC-Adjacent: BSSC CGL / Inter-Level",
+                    "📜 State PSC Adjacent (UPPSC / JPSC / MPPSC)",
+                    "✏️ Custom Other Exam",
+                ]
+                sel_category = st.selectbox("Exam Category / Paper Type*", pyq_category_options, index=0, key="pyq_category_sel")
+
+                # Resolve source_type
+                if "Official BPSC CCE" in sel_category:
+                    target_source_type = "Official PYQ"
+                    default_paper_name = suggested_pyq_title or "67th BPSC CCE Prelims (2022)"
+                else:
+                    target_source_type = "Adjacent PYQ"
+                    clean_cat = sel_category.split(":")[-1].split("(")[0].strip()
+                    default_paper_name = suggested_pyq_title or f"{clean_cat} Prelims"
+
+                pyq_paper_title = st.text_input(
+                    "Exam Edition / Paper Name*",
+                    value=default_paper_name,
+                    placeholder="e.g. BPSC CDPO Prelims 2022, 67th BPSC Re-Exam 2022",
+                    help="Tagged as the official paper edition for attribution.",
+                    key="pyq_paper_title_input",
+                )
+
+                meta_c1, meta_c2, meta_c3 = st.columns(3)
+                pyq_year = meta_c1.number_input("Exam Year (Optional)", min_value=1990, max_value=2030, value=2023, step=1, key="pyq_year_input")
+                pyq_set = meta_c2.text_input("Paper Set (Optional)", value="", placeholder="e.g. Set A", key="pyq_set_input")
+                pyq_ans_status = meta_c3.selectbox(
+                    "Answer Key Status",
+                    ["Official Verified Answer Key", "Provisional Key", "Model Key"],
+                    index=0,
+                    key="pyq_ans_status_sel",
+                )
+
+            with pyq_up_c2:
+                target_exam_pyq = st.selectbox("Target Exam Syllabus", ["BPSC", "UPSC", "Both"], index=0, key="pyq_target_exam")
+                ocr_strat_sel_pyq = st.selectbox(
+                    "OCR Processing Pipeline",
+                    [
+                        "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)",
+                        "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Digital/Standard Mocks)",
+                        "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)",
+                        "💻 Local OCR Only (RapidOCR / Pytesseract)",
+                    ],
+                    index=0,
+                    key="pyq_ocr_strat",
+                )
+                strat_map_pyq = {
+                    "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)": "auto",
+                    "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Digital/Standard Mocks)": "gemini_file",
+                    "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)": "vision_only",
+                    "💻 Local OCR Only (RapidOCR / Pytesseract)": "local_only",
+                }
+                active_strat_pyq = strat_map_pyq.get(ocr_strat_sel_pyq, "auto")
+
+                pref_eng_pyq = "auto"
+                if active_strat_pyq not in ["vision_only", "gemini_file"]:
+                    pref_eng_label_pyq = st.selectbox(
+                        "Preferred Local Engine",
+                        [
+                            "Auto Priority (RapidOCR → PaddleOCR → Pytesseract)",
+                            "RapidOCR (Fastest ONNX CPU)",
+                            "PaddleOCR (Deep Learning)",
+                            "Pytesseract (Google Tesseract)",
+                        ],
+                        index=0,
+                        key="pyq_pref_engine",
+                    )
+                    code_map_p = {
+                        "Auto Priority (RapidOCR → PaddleOCR → Pytesseract)": "auto",
+                        "RapidOCR (Fastest ONNX CPU)": "rapidocr",
+                        "PaddleOCR (Deep Learning)": "paddleocr",
+                        "Pytesseract (Google Tesseract)": "pytesseract",
+                    }
+                    pref_eng_pyq = code_map_p.get(pref_eng_label_pyq, "auto")
+
+                pyq_scope = st.radio("Page Processing Scope", ["Process All Pages", "Custom Page Range"], horizontal=True, key="pyq_scope_radio")
+                p_pyq_start, p_pyq_end = None, None
+                if pyq_scope == "Custom Page Range":
+                    pr_c1, pr_c2 = st.columns(2)
+                    p_pyq_start = pr_c1.number_input("Start Page", min_value=1, value=1, step=1, key="pyq_p_start")
+                    p_pyq_end = pr_c2.number_input("End Page", min_value=1, value=15, step=1, key="pyq_p_end")
+
+                pyq_batch_size = st.slider(
+                    "Batch Size (Pages per AI Chunk)",
+                    min_value=1,
+                    max_value=10,
+                    value=3 if active_strat_pyq != "gemini_file" else 4,
+                    key="pyq_chunk_slider",
+                )
+
+                pyq_translate_hindi = st.checkbox(
+                    "🌐 Auto-Translate Hindi Questions to English",
+                    value=True,
+                    help="Automatically translates Hindi questions and options to clear academic English while preserving the original Hindi text for verification.",
+                    key="pyq_translate_hindi_cb",
+                )
+
+            is_cancel_pyq = dup_mode_pyq.startswith("⛔")
+            extract_pyq_clicked = st.button(
+                "🚀 Extract, OCR & Categorize PYQ Paper (Background)",
+                type="primary",
+                use_container_width=True,
+                disabled=(uploaded_pyq_pdf is None or is_cancel_pyq),
+                key="btn_run_pyq_extraction",
+            )
+
+            if is_cancel_pyq and uploaded_pyq_pdf is not None:
+                st.info("ℹ️ Processing cancelled to prevent duplicate questions.")
+
+            if extract_pyq_clicked and uploaded_pyq_pdf is not None and not is_cancel_pyq:
+                if not config.is_gemini_configured():
+                    st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & question extraction.")
+                else:
+                    st.session_state["extracted_pyq_preview"] = None
+                    st.session_state["dismissed_pyq_job_id"] = None
+                    pdf_bytes_pyq = uploaded_pyq_pdf.getvalue()
+                    new_job_id = pdf_extractor.start_background_extraction_job(
+                        pdf_bytes=pdf_bytes_pyq,
+                        filename=uploaded_pyq_pdf.name,
+                        mock_title=pyq_paper_title.strip() or "Uploaded PYQ Paper",
+                        target_exam=target_exam_pyq,
+                        page_start=p_pyq_start,
+                        page_end=p_pyq_end,
+                        chunk_size=pyq_batch_size,
+                        ocr_strategy=active_strat_pyq,
+                        preferred_local_engine=pref_eng_pyq,
+                        translate_hindi=pyq_translate_hindi,
+                        job_type="pyq",
+                        source_type=target_source_type,
+                        exam_edition=pyq_paper_title.strip() or "Uploaded PYQ Paper",
+                        exam_year=int(pyq_year) if pyq_year else None,
+                        paper_set=pyq_set.strip(),
+                        answer_key_status=pyq_ans_status,
+                    )
+                    st.success(f"🚀 Started background PYQ extraction for '{uploaded_pyq_pdf.name}'! You can safely reload the page or put your computer to sleep.")
+                    time.sleep(1)
+                    st.rerun()
+
+        # Render Extracted PYQ Preview & Database Save Action with Deduplication
+        if st.session_state.get("extracted_pyq_preview") is not None:
+            prev_info_pyq = st.session_state["extracted_pyq_preview"]
+            ext_qs_pyq = prev_info_pyq.get("questions", [])
+            ext_stats_pyq = prev_info_pyq.get("stats", {})
+
+            st.markdown("---")
+            st.subheader(f"📊 Extraction Preview: {ext_stats_pyq.get('mock_title', 'PYQ Paper')}")
+
+            if not ext_qs_pyq:
+                st.warning("No multiple-choice questions were found in the selected pages of this document. Check the page range or ensure the pages contain questions.")
+                if st.button("Clear Preview", key="btn_clear_empty_pyq_prev"):
+                    if ext_stats_pyq.get("job_id"):
+                        db.clear_ocr_job(ext_stats_pyq["job_id"])
+                        st.session_state["dismissed_pyq_job_id"] = ext_stats_pyq["job_id"]
+                    st.session_state["extracted_pyq_preview"] = None
+                    st.rerun()
+            else:
+                if "unique_qs" not in prev_info_pyq or "duplicate_qs" not in prev_info_pyq:
+                    u_qs, d_qs = db.filter_duplicate_questions(ext_qs_pyq)
+                    prev_info_pyq["unique_qs"] = u_qs
+                    prev_info_pyq["duplicate_qs"] = d_qs
+                unique_qs_pyq = prev_info_pyq["unique_qs"]
+                duplicate_qs_pyq = prev_info_pyq["duplicate_qs"]
+
+                # Telemetry
+                pk1, pk2, pk3, pk4, pk5 = st.columns(5)
+                pk1.metric("Total Questions Parsed", len(ext_qs_pyq))
+                pk2.metric("✨ New Unique Questions", len(unique_qs_pyq), help="Questions not currently in your Question Bank")
+                pk3.metric("🛡️ Duplicates Filtered", len(duplicate_qs_pyq), help="Questions already present in your database")
+                p_strat_pyq = ext_stats_pyq.get("ocr_strategy", "auto")
+                p_label_pyq = "Native File API" if p_strat_pyq == "gemini_file" else p_strat_pyq.replace("_", " ").title()
+                pk4.metric("Pipeline Mode", p_label_pyq)
+                t_saved_pyq = ext_stats_pyq.get("tokens_saved_estimate", 0)
+                pk5.metric("⚡ Est. Tokens Saved", f"~{t_saved_pyq:,}" if t_saved_pyq > 0 else "N/A")
+
+                # Telemetry breakdown
+                gfile_p = ext_stats_pyq.get("gemini_file_pages", 0)
+                loc_p = ext_stats_pyq.get("local_ocr_pages", 0)
+                vis_p = ext_stats_pyq.get("vision_fallback_pages", 0)
+                dig_p = ext_stats_pyq.get("digital_text_pages", 0)
+                engs_p = ext_stats_pyq.get("local_engines_used", [])
+
+                tele_items_pyq = []
+                if gfile_p > 0:
+                    tele_items_pyq.append(f"🚀 **{gfile_p} page(s)** processed via **Gemini Native File API**")
+                if loc_p > 0:
+                    tele_items_pyq.append(f"⚡ **{loc_p} page(s)** processed via **Local OCR** ({', '.join(engs_p) if engs_p else 'RapidOCR'})")
+                if dig_p > 0:
+                    tele_items_pyq.append(f"📄 **{dig_p} page(s)** processed via **Digital Text Extraction**")
+                if vis_p > 0:
+                    tele_items_pyq.append(f"👁️ **{vis_p} page(s)** verified via **Gemini Multimodal Vision Fallback**")
+                trans_cnt_pyq = sum(1 for q in ext_qs_pyq if q.get("original_language") == "Hindi" or bool(q.get("original_question_hindi")))
+                if trans_cnt_pyq > 0:
+                    tele_items_pyq.append(f"🌐 **{trans_cnt_pyq} question(s)** translated from **Hindi to English**")
+
+                if tele_items_pyq:
+                    st.caption(" • ".join(tele_items_pyq))
+
+                if len(duplicate_qs_pyq) > 0:
+                    st.info(f"🛡️ **Deduplication Active:** **{len(duplicate_qs_pyq)}** question(s) already exist in your Question Bank and will NOT be inserted again.")
+
+                # Subject sorting distribution
+                st.markdown("#### 🧭 Automatic Subject Distribution (New Unique Questions)")
+                if "u_subj_counts" not in prev_info_pyq:
+                    u_s_pyq: Dict[str, int] = {}
+                    for q in unique_qs_pyq:
+                        s_name = q.get("subject", "Other")
+                        u_s_pyq[s_name] = u_s_pyq.get(s_name, 0) + 1
+                    prev_info_pyq["u_subj_counts"] = u_s_pyq
+                u_subj_counts_pyq = prev_info_pyq["u_subj_counts"]
+
+                if u_subj_counts_pyq:
+                    d_cols_pyq = st.columns(min(5, len(u_subj_counts_pyq)))
+                    for d_idx, (s_name, s_count) in enumerate(u_subj_counts_pyq.items()):
+                        d_cols_pyq[d_idx % len(d_cols_pyq)].metric(s_name, f"{s_count} Qs")
+                elif len(unique_qs_pyq) == 0:
+                    st.warning("⚠️ **All questions in this PDF already exist in your Question Bank!** Zero duplicate questions will be inserted.")
+
+                # Preview Table & Cards
+                if unique_qs_pyq:
+                    prev_slice_pyq = unique_qs_pyq[:100]
+                    prev_df_pyq = pd.DataFrame(prev_slice_pyq)
+                    cols_p = ["source_type", "exam_edition", "subject", "topic", "question", "correct_option", "difficulty", "explanation"]
+                    avail_p_cols = [c for c in cols_p if c in prev_df_pyq.columns]
+                    st.dataframe(prev_df_pyq[avail_p_cols], use_container_width=True, hide_index=True)
+                    if len(unique_qs_pyq) > 100:
+                        st.caption(f"⚡ Showing first 100 of {len(unique_qs_pyq):,} extracted questions in preview table. All {len(unique_qs_pyq):,} unique questions will be saved.")
+
+                    with st.expander("🔍 Inspect Extracted Question Cards (Paginated)", expanded=False):
+                        ps_size = 10
+                        ps_tot = max(1, (len(unique_qs_pyq) + ps_size - 1) // ps_size)
+                        ps_col1, _ = st.columns([1, 3])
+                        ps_num = ps_col1.number_input(f"Page (1 to {ps_tot})", min_value=1, max_value=ps_tot, value=1, step=1, key="pyq_prev_card_page")
+                        ps_start = (ps_num - 1) * ps_size
+                        for idx, q_dict in enumerate(unique_qs_pyq[ps_start : ps_start + ps_size]):
+                            _render_question_card_view(q_dict, show_actions=False, key_prefix=f"pyq_prev_{ps_start + idx}")
+
+                # Save or Discard Actions
+                psv_col1, psv_col2 = st.columns([3, 1])
+                btn_save_pyq_text = f"💾 Add {len(unique_qs_pyq):,} Unique Questions to PYQ Vault" if unique_qs_pyq else "💾 No New Questions to Add (All Duplicate)"
+                if psv_col1.button(btn_save_pyq_text, type="primary", use_container_width=True, disabled=len(unique_qs_pyq) == 0, key="btn_save_pyq_to_db"):
+                    if st.session_state.get("pyq_dup_mode", "").startswith("🔄"):
+                        db.delete_adjacent_exam(ext_stats_pyq.get("mock_title", ""))
+
+                    with st.spinner(f"Saving {len(unique_qs_pyq):,} questions into your PYQ Vault..."):
+                        saved_pyq_count = db.add_questions_batch(unique_qs_pyq, skip_if_duplicate=False)
+
+                    fname_p = ext_stats_pyq.get("filename", ext_stats_pyq.get("mock_title", "pyq.pdf"))
+                    fhash_p = ext_stats_pyq.get("file_hash", "")
+                    fbytes_p = ext_stats_pyq.get("file_bytes_len", 0)
+                    db.record_uploaded_pdf(
+                        filename=fname_p,
+                        file_hash=fhash_p,
+                        mock_title=ext_stats_pyq.get("mock_title", ""),
+                        questions_count=saved_pyq_count,
+                        file_size_bytes=fbytes_p,
+                    )
+
+                    if ext_stats_pyq.get("job_id"):
+                        db.clear_ocr_job(ext_stats_pyq["job_id"])
+                    st.session_state["extracted_pyq_preview"] = None
+                    st.success(f"✨ Successfully added **{saved_pyq_count:,}** unique PYQ questions! (Prevented {len(duplicate_qs_pyq)} duplicates from repeating).")
+                    time.sleep(1)
+                    st.rerun()
+
+                if psv_col2.button("❌ Discard Preview", use_container_width=True, key="btn_discard_pyq_prev"):
+                    if ext_stats_pyq.get("job_id"):
+                        db.clear_ocr_job(ext_stats_pyq["job_id"])
+                    st.session_state["extracted_pyq_preview"] = None
+                    st.rerun()
+
+    # =========================================================================
+    # Tab 6: All Questions Vault (Unified Browser)
     # =========================================================================
     with tab_all:
         st.subheader("🔍 All Questions Vault")
@@ -1916,7 +2477,7 @@ def show_question_bank() -> None:
             editions_list = ["All"] + db.get_distinct_editions()
             edition_filter = c4.selectbox("Exam Edition", editions_list, key="qb_ed")
 
-            src_choices = ["All", "Official PYQ", "Mock question", "Built-in sample", "AI-generated", "User-added"]
+            src_choices = ["All", "Official PYQ", "Adjacent PYQ", "Mock question", "Built-in sample", "AI-generated", "User-added"]
             source_filter = c5.selectbox("Provenance", src_choices, key="qb_src")
             diff_filter = c6.selectbox("Difficulty", ["All", "Easy", "Medium", "Hard"], key="qb_diff")
             search_query = c7.text_input("Search Keyword", placeholder="e.g. Patna, Kunwar Singh...", key="all_kw")
@@ -2811,6 +3372,9 @@ def show_practice() -> None:
                     if row.get("source_type") == "Official PYQ":
                         q_badge_cls = "badge-pyq"
                         q_badge_text = "🏛️ Official PYQ"
+                    elif row.get("source_type") == "Adjacent PYQ":
+                        q_badge_cls = "badge-adjacent"
+                        q_badge_text = "📜 Adjacent PYQ"
                     elif row.get("source_type") == "Mock question":
                         q_badge_cls = "badge-mock"
                         q_badge_text = "📝 Mock Question"
@@ -3038,6 +3602,7 @@ def show_practice() -> None:
         src_types = [
             "All Questions",
             "Official PYQs Only",
+            "BPSC-Adjacent PYQs Only",
             "Mock Questions Only",
             "AI Practice Sets",
             "Starter Samples",
@@ -3048,6 +3613,7 @@ def show_practice() -> None:
         src_map = {
             "All Questions": "All",
             "Official PYQs Only": "Official PYQ",
+            "BPSC-Adjacent PYQs Only": "Adjacent PYQ",
             "Mock Questions Only": "Mock question",
             "AI Practice Sets": "AI-generated",
             "Starter Samples": "Built-in sample",
@@ -3068,6 +3634,12 @@ def show_practice() -> None:
                 sel_m = st.selectbox("Filter Specific Mock Test (Optional)", mock_opts, key="p_mock_sub")
                 if sel_m != "All Mock Tests":
                     chosen_mock = sel_m
+        elif src_choice == "BPSC-Adjacent PYQs Only":
+            adj_opts = ["All Adjacent Exam Papers"] + db.get_adjacent_exam_names()
+            if len(adj_opts) > 2:
+                sel_adj = st.selectbox("Filter Specific Adjacent Exam (Optional)", adj_opts, key="p_adj_sub")
+                if sel_adj != "All Adjacent Exam Papers":
+                    chosen_mock = sel_adj
 
         matching_ids = db.get_question_ids(
             exam=exam,

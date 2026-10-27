@@ -446,12 +446,18 @@ class TestDatabaseV1Features(unittest.TestCase):
                 source_url TEXT NOT NULL DEFAULT '',
                 difficulty TEXT NOT NULL DEFAULT 'Medium',
                 is_ai_generated INTEGER NOT NULL DEFAULT 0,
+                exam_edition TEXT NOT NULL DEFAULT '',
+                exam_year TEXT NOT NULL DEFAULT '',
+                paper_set TEXT NOT NULL DEFAULT '',
+                official_qno INTEGER NOT NULL DEFAULT 0,
+                answer_key_status TEXT NOT NULL DEFAULT 'Unverified',
                 original_language TEXT NOT NULL DEFAULT 'English',
                 original_question_hindi TEXT NOT NULL DEFAULT '',
                 normalized_stem TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             )
         """)
+        db._ensure_mock_files_table(self.conn)
         self.conn.execute("""
             CREATE TABLE pinned_notebook (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -565,6 +571,95 @@ class TestDatabaseV1Features(unittest.TestCase):
         self.assertEqual(row["question"], "Which article of the Constitution?")
         self.assertEqual(row["original_question_hindi"], "संविधान का कौन सा अनुच्छेद?")
         self.assertIn("which article of the constitution", row["normalized_stem"])
+
+    def test_adjacent_pyq_separation_and_management(self):
+        """Verify that BPSC-Adjacent PYQs are strictly separated from Mocks and Official PYQs."""
+        # Insert 1 Official PYQ, 1 Adjacent PYQ (CDPO), and 1 Mock Question
+        db.insert_question(self.conn, {
+            "question": "What is the capital of ancient Magadha?",
+            "option_a": "Rajgriha", "option_b": "Patliputra", "option_c": "Vaishali", "option_d": "Champa",
+            "correct_option": "A", "explanation": "Rajgriha was the first capital of Magadha.",
+            "source_type": "Official PYQ", "source_name": "67th BPSC CCE", "exam_edition": "67th BPSC CCE Prelims",
+            "subject": "History", "exam_year": 2022
+        })
+        db.insert_question(self.conn, {
+            "question": "When was the Bihar Development Council formed?",
+            "option_a": "1952", "option_b": "1954", "option_c": "1956", "option_d": "1960",
+            "correct_option": "A", "explanation": "Formed in 1952.",
+            "source_type": "Adjacent PYQ", "source_name": "BPSC CDPO Prelims 2022", "exam_edition": "BPSC CDPO Prelims 2022",
+            "subject": "Bihar Special", "exam_year": 2022
+        })
+        db.insert_question(self.conn, {
+            "question": "Which coaching test series mock question is this?",
+            "option_a": "Test 1", "option_b": "Test 2", "option_c": "Test 3", "option_d": "Test 4",
+            "correct_option": "A", "explanation": "Coaching mock test.",
+            "source_type": "Mock question", "source_name": "Drishti Mock 01", "exam_edition": "Drishti Mock 01 (Mock PDF)",
+            "subject": "Polity"
+        })
+        self.conn.commit()
+
+        with patch("db.connect_db") as mock_conn_fn:
+            mock_conn_fn.return_value.__enter__.return_value = self.conn
+
+            # 1. Verify list_questions separation
+            adj_df = db.list_questions(source_type="Adjacent PYQ")
+            self.assertEqual(len(adj_df), 1)
+            self.assertEqual(adj_df.iloc[0]["source_name"], "BPSC CDPO Prelims 2022")
+            self.assertEqual(adj_df.iloc[0]["source_type"], "Adjacent PYQ")
+
+            mock_df = db.list_questions(source_type="Mock question")
+            self.assertEqual(len(mock_df), 1)
+            self.assertEqual(mock_df.iloc[0]["source_name"], "Drishti Mock 01")
+
+            off_df = db.list_questions(source_type="Official PYQ")
+            self.assertEqual(len(off_df), 1)
+            self.assertEqual(off_df.iloc[0]["source_name"], "67th BPSC CCE")
+
+            # 2. Verify get_adjacent_exam_names
+            adj_names = db.get_adjacent_exam_names()
+            self.assertIn("BPSC CDPO Prelims 2022", adj_names)
+            self.assertNotIn("Drishti Mock 01", adj_names)
+
+            # 3. Verify delete_adjacent_exam
+            del_cnt = db.delete_adjacent_exam("BPSC CDPO Prelims 2022")
+            self.assertEqual(del_cnt, 1)
+
+            # Check that adjacent question was deleted, but mock and official remain intact
+            self.assertEqual(len(db.list_questions(source_type="Adjacent PYQ")), 0)
+            self.assertEqual(len(db.list_questions(source_type="Mock question")), 1)
+            self.assertEqual(len(db.list_questions(source_type="Official PYQ")), 1)
+
+    def test_ocr_jobs_job_type_segregation(self):
+        """Verify that OCR jobs isolate background execution by job_type ('mock' vs 'pyq')."""
+        with patch("db.connect_db") as mock_conn_fn:
+            mock_conn_fn.return_value.__enter__.return_value = self.conn
+
+            db.create_ocr_job(
+                job_id="job-mock-1",
+                filename="mock_test_01.pdf",
+                mock_title="Drishti Mock Test 01",
+                target_exam="BPSC",
+                job_type="mock",
+            )
+            db.create_ocr_job(
+                job_id="job-pyq-1",
+                filename="bpsc_cdpo_2022.pdf",
+                mock_title="BPSC CDPO Prelims 2022",
+                target_exam="BPSC",
+                job_type="pyq",
+            )
+
+            # Mock job query should only return job-mock-1
+            active_mock = db.get_active_ocr_job(job_type="mock")
+            self.assertIsNotNone(active_mock)
+            self.assertEqual(active_mock["job_id"], "job-mock-1")
+            self.assertEqual(active_mock["job_type"], "mock")
+
+            # PYQ job query should only return job-pyq-1
+            active_pyq = db.get_active_ocr_job(job_type="pyq")
+            self.assertIsNotNone(active_pyq)
+            self.assertEqual(active_pyq["job_id"], "job-pyq-1")
+            self.assertEqual(active_pyq["job_type"], "pyq")
 
 
 class TestMockQuestionsAndPDFExtractor(unittest.TestCase):

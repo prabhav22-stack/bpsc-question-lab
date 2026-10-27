@@ -40,6 +40,7 @@ EXAMS = ["BPSC", "UPSC", "Both"]
 DIFFICULTIES = ["Easy", "Medium", "Hard"]
 SOURCE_TYPES = [
     "Official PYQ",
+    "Adjacent PYQ",
     "Mock question",
     "Online question",
     "Book / notes",
@@ -2272,6 +2273,7 @@ def get_question_bank_summary(conn_factory: Any = None) -> Dict[str, Any]:
             SELECT
                 COUNT(*) as total_questions,
                 SUM(CASE WHEN source_type = 'Official PYQ' THEN 1 ELSE 0 END) as pyq_count,
+                SUM(CASE WHEN source_type = 'Adjacent PYQ' THEN 1 ELSE 0 END) as adjacent_pyq_count,
                 SUM(CASE WHEN source_type = 'Mock question' THEN 1 ELSE 0 END) as mock_count,
                 SUM(CASE WHEN source_type = 'AI-generated' THEN 1 ELSE 0 END) as ai_count,
                 SUM(CASE WHEN source_type = 'Built-in sample' THEN 1 ELSE 0 END) as sample_count,
@@ -2284,6 +2286,7 @@ def get_question_bank_summary(conn_factory: Any = None) -> Dict[str, Any]:
             return {
                 "total_questions": 0,
                 "pyq_count": 0,
+                "adjacent_pyq_count": 0,
                 "mock_count": 0,
                 "ai_count": 0,
                 "sample_count": 0,
@@ -2293,6 +2296,7 @@ def get_question_bank_summary(conn_factory: Any = None) -> Dict[str, Any]:
         return {
             "total_questions": int(row["total_questions"] or 0),
             "pyq_count": int(row["pyq_count"] or 0),
+            "adjacent_pyq_count": int(row["adjacent_pyq_count"] or 0),
             "mock_count": int(row["mock_count"] or 0),
             "ai_count": int(row["ai_count"] or 0),
             "sample_count": int(row["sample_count"] or 0),
@@ -2505,6 +2509,30 @@ def delete_mock_test(source_name: str) -> int:
     with connect_db() as conn:
         cur = conn.execute(
             "DELETE FROM questions WHERE source_type = 'Mock question' AND (source_name = ? OR exam_edition LIKE ?)",
+            (source_name, f"%{source_name}%"),
+        )
+        conn.execute(
+            "DELETE FROM uploaded_mock_files WHERE lower(mock_title) = ? OR lower(filename) = ? OR lower(filename) LIKE ?",
+            (source_name.lower(), source_name.lower(), f"%{source_name.lower()}%"),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def get_adjacent_exam_names() -> List[str]:
+    """Return distinct names or editions of uploaded BPSC-adjacent exam papers."""
+    with connect_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT source_name FROM questions WHERE source_type = 'Adjacent PYQ' AND source_name != '' ORDER BY source_name"
+        ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
+
+def delete_adjacent_exam(source_name: str) -> int:
+    """Delete all adjacent PYQ questions associated with a given exam paper name or edition."""
+    with connect_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM questions WHERE source_type = 'Adjacent PYQ' AND (source_name = ? OR exam_edition LIKE ?)",
             (source_name, f"%{source_name}%"),
         )
         conn.execute(
@@ -3007,6 +3035,7 @@ def _ensure_ocr_jobs_table(conn: sqlite3.Connection) -> None:
             filename TEXT NOT NULL,
             mock_title TEXT NOT NULL,
             target_exam TEXT NOT NULL DEFAULT 'BPSC',
+            job_type TEXT NOT NULL DEFAULT 'mock',
             status TEXT NOT NULL DEFAULT 'running',
             progress REAL NOT NULL DEFAULT 0.0,
             progress_msg TEXT NOT NULL DEFAULT '',
@@ -3020,6 +3049,10 @@ def _ensure_ocr_jobs_table(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
     """)
+    try:
+        conn.execute("ALTER TABLE ocr_jobs ADD COLUMN job_type TEXT DEFAULT 'mock'")
+    except Exception:
+        pass
 
 
 def create_ocr_job(
@@ -3028,6 +3061,7 @@ def create_ocr_job(
     mock_title: str,
     target_exam: str = "BPSC",
     total_pages: int = 0,
+    job_type: str = "mock",
     conn_factory: Any = None,
 ) -> None:
     """Register a new background OCR job in SQLite."""
@@ -3038,13 +3072,13 @@ def create_ocr_job(
         conn.execute(
             """
             INSERT INTO ocr_jobs (
-                job_id, filename, mock_title, target_exam, status,
+                job_id, filename, mock_title, target_exam, job_type, status,
                 progress, progress_msg, total_pages, processed_pages,
                 extracted_questions_json, stats_json, error_msg,
                 cancel_requested, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'running', 0.0, 'Initializing background OCR...', ?, 0, '[]', '{}', '', 0, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 'running', 0.0, 'Initializing background OCR...', ?, 0, '[]', '{}', '', 0, ?, ?)
             """,
-            (job_id, filename, mock_title, target_exam, total_pages, now, now),
+            (job_id, filename, mock_title, target_exam, job_type, total_pages, now, now),
         )
         conn.commit()
 
@@ -3202,14 +3236,20 @@ def get_ocr_job(
         return d
 
 
-def get_active_ocr_job(conn_factory: Any = None) -> Optional[Dict[str, Any]]:
-    """Retrieve currently running background OCR job if any."""
+def get_active_ocr_job(job_type: Optional[str] = None, conn_factory: Any = None) -> Optional[Dict[str, Any]]:
+    """Retrieve currently running background OCR job if any, optionally filtered by job_type."""
     connector = conn_factory or connect_db
     with connector() as conn:
         _ensure_ocr_jobs_table(conn)
-        row = conn.execute(
-            "SELECT * FROM ocr_jobs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
+        if job_type:
+            row = conn.execute(
+                "SELECT * FROM ocr_jobs WHERE status = 'running' AND job_type = ? ORDER BY created_at DESC LIMIT 1",
+                (job_type,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM ocr_jobs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
         if not row:
             return None
         d = dict(row)
@@ -3224,14 +3264,20 @@ def get_active_ocr_job(conn_factory: Any = None) -> Optional[Dict[str, Any]]:
         return d
 
 
-def get_latest_completed_or_active_job(conn_factory: Any = None) -> Optional[Dict[str, Any]]:
-    """Retrieve the most recent active or completed OCR job for state restoration."""
+def get_latest_completed_or_active_job(job_type: Optional[str] = None, conn_factory: Any = None) -> Optional[Dict[str, Any]]:
+    """Retrieve the most recent active or completed OCR job for state restoration, optionally filtered by job_type."""
     connector = conn_factory or connect_db
     with connector() as conn:
         _ensure_ocr_jobs_table(conn)
-        row = conn.execute(
-            "SELECT * FROM ocr_jobs WHERE status IN ('running', 'completed', 'cancelled') ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
+        if job_type:
+            row = conn.execute(
+                "SELECT * FROM ocr_jobs WHERE status IN ('running', 'completed', 'cancelled') AND job_type = ? ORDER BY created_at DESC LIMIT 1",
+                (job_type,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM ocr_jobs WHERE status IN ('running', 'completed', 'cancelled') ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
         if not row:
             return None
         d = dict(row)
