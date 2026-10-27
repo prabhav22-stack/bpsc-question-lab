@@ -85,7 +85,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 60 tests (19 legacy regression tests + 24 v1.0 feature tests + 17 mock questions, background OCR, Gemini Native File API, deduplication, translation & PDF extractor tests):
+Run all 61 tests (19 legacy regression tests + 24 v1.0 feature tests + 18 mock questions, background OCR, Gemini Native File API, deduplication, translation & PDF extractor tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

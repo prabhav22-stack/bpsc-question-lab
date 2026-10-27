@@ -115,6 +115,44 @@ def slice_pdf_chunk(reader: pypdf.PdfReader, start_page: int, end_page: int) -> 
     return buf.getvalue()
 
 
+def safe_parse_question_json(raw_text: str) -> List[Dict[str, Any]]:
+    """Parse JSON response from Gemini, with automatic recovery for truncated outputs."""
+    if not raw_text or not raw_text.strip():
+        return []
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    # 1. Direct JSON parse
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return data.get("questions", [])
+        elif isinstance(data, list):
+            return data
+    except Exception:
+        pass
+
+    # 2. Resilient recovery for token-limit truncated JSON
+    idx = cleaned.rfind("}")
+    while idx > 0:
+        candidate_slice = cleaned[:idx + 1]
+        for closing in ["]}", "]}", "]", "}"]:
+            try:
+                candidate = candidate_slice + closing
+                data = json.loads(candidate)
+                if isinstance(data, dict) and "questions" in data and isinstance(data["questions"], list):
+                    return data["questions"]
+                elif isinstance(data, list):
+                    return data
+            except Exception:
+                pass
+        idx = cleaned.rfind("}", 0, idx)
+
+    return []
+
+
 def extract_mock_questions_from_pdf(
     pdf_bytes: bytes,
     mock_title: str = "Uploaded Mock Test",
@@ -191,6 +229,7 @@ def extract_mock_questions_from_pdf(
     vision_fallback_pages_count = 0
     digital_text_pages_count = 0
     local_engines_used: set = set()
+    chunk_warnings: List[str] = []
 
     if progress_callback:
         progress_callback(
@@ -355,9 +394,16 @@ def extract_mock_questions_from_pdf(
                         pass
 
             if response.text:
-                parsed_json = json.loads(response.text)
-                q_set = ExtractedMockQuestionSet.model_validate(parsed_json)
-                for q in q_set.questions:
+                raw_items = safe_parse_question_json(response.text)
+                for q_item in raw_items:
+                    try:
+                        if isinstance(q_item, dict):
+                            q = ExtractedMockQuestion.model_validate(q_item)
+                        else:
+                            q = q_item
+                    except Exception:
+                        continue
+
                     # Deduplicate questions within the document
                     raw_stem = q.question.strip()
                     s_clean = re.sub(
@@ -372,7 +418,7 @@ def extract_mock_questions_from_pdf(
                         continue
                     seen_stems.add(norm_stem)
 
-                    # Prepare database-ready dictionary
+                    # Prepare database-ready dictionary with complete bilingual provenance
                     q_dict = {
                         "exam": target_exam,
                         "subject": q.subject,
@@ -393,14 +439,15 @@ def extract_mock_questions_from_pdf(
                         "exam_edition": f"{mock_title.strip()} (Mock PDF)",
                         "is_ai_generated": 0,
                         "answer_key_status": "Extracted & Verified",
+                        "original_language": getattr(q, "original_language", "English"),
+                        "original_question_hindi": getattr(q, "original_question_hindi", ""),
                     }
                     all_extracted.append(q_dict)
                     subj = q.subject
                     subject_counts[subj] = subject_counts.get(subj, 0) + 1
 
-        except Exception:
-            # Continue processing remaining chunks rather than aborting entirely
-            pass
+        except Exception as chunk_exc:
+            chunk_warnings.append(f"{chunk_label}: {chunk_exc}")
 
         # Trigger incremental callback so database and frontend have fresh progress & questions
         if incremental_callback:
@@ -426,6 +473,7 @@ def extract_mock_questions_from_pdf(
                 "digital_text_pages": digital_text_pages_count,
                 "tokens_saved_estimate": tokens_saved_intermediate,
                 "local_engines_used": list(local_engines_used),
+                "warnings": list(chunk_warnings),
             }
             incremental_callback(
                 min(0.99, p_pct + (0.90 / max(1, len(chunks)))),
@@ -458,6 +506,7 @@ def extract_mock_questions_from_pdf(
         "tokens_saved_estimate": tokens_saved,
         "local_engines_used": list(local_engines_used),
         "available_engines": [e["name"] for e in ocr_engine.get_available_ocr_engines() if e["available"]],
+        "warnings": list(chunk_warnings),
     }
 
     if progress_callback:

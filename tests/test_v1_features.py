@@ -1021,6 +1021,34 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
             # Verify client.files.delete was called to clean up uploaded file
             mock_client.files.delete.assert_called_with(name="files/test_mock_123")
 
+    def test_safe_parse_question_json_truncated_recovery(self):
+        """Verify that truncated Gemini JSON outputs are safely recovered without crashing."""
+        import pdf_extractor
+
+        # Incomplete JSON simulation cut off mid-question by token limit
+        truncated_json = """
+        {
+            "questions": [
+                {
+                    "question": "What is the capital of Bihar?",
+                    "option_a": "Patna",
+                    "option_b": "Gaya",
+                    "option_c": "Munger",
+                    "option_d": "Bhagalpur",
+                    "correct_option": "A",
+                    "explanation": "Patna is the state capital.",
+                    "subject": "Bihar Special"
+                },
+                {
+                    "question": "Who was the first Chief Minister of Bihar?",
+                    "option_a": "Sri Krishna Sinha",
+                    "option_b": "Incomplete cut off text...
+        """
+        recovered = pdf_extractor.safe_parse_question_json(truncated_json)
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0]["question"], "What is the capital of Bihar?")
+        self.assertEqual(recovered[0]["correct_option"], "A")
+
     def test_optimize_image_for_fast_ocr(self):
         """Verify that oversized scans (>1600px) are downscaled and converted to grayscale for fast OCR."""
         from PIL import Image

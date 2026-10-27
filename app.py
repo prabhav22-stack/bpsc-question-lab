@@ -1537,22 +1537,22 @@ def show_question_bank() -> None:
                 ocr_strat_selection = st.selectbox(
                     "OCR Processing Pipeline",
                     [
-                        "🚀 Gemini Native File API (Ultra-Fast Cloud Ingestion - Recommended)",
                         "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)",
-                        "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)",
+                        "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Digital/Standard Mocks)",
+                        "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)",
                         "💻 Local OCR Only (RapidOCR / Pytesseract)",
                     ],
                     index=0,
-                    help="Gemini Native File API uploads whole PDF chunks directly to Google Tensor Cloud, extracting & translating 50+ questions in ~20-30 seconds with 0 local CPU load.",
+                    help="For dense scanned Hindi books (like Eduteria, Ghatna Chakra), Auto Cascaded or Gemini Vision with Batch Size 2-4 pages provides the highest character fidelity for Hindi matras and prevents token cut-offs.",
                     key="pdf_ocr_pipeline_choice",
                 )
                 strat_code_map = {
-                    "🚀 Gemini Native File API (Ultra-Fast Cloud Ingestion - Recommended)": "gemini_file",
                     "⚡ Auto Cascaded (Local OCR First → Gemini Vision Fallback)": "auto",
-                    "👁️ Gemini Multimodal Vision Only (Direct Cloud Vision)": "vision_only",
+                    "🚀 Gemini Native File API (Direct Cloud Ingestion — Fastest for Digital/Standard Mocks)": "gemini_file",
+                    "👁️ Gemini Multimodal Vision Only (Direct High-Resolution Page Vision)": "vision_only",
                     "💻 Local OCR Only (RapidOCR / Pytesseract)": "local_only",
                 }
-                active_ocr_strategy = strat_code_map.get(ocr_strat_selection, "gemini_file")
+                active_ocr_strategy = strat_code_map.get(ocr_strat_selection, "auto")
 
                 pref_engine_code = "auto"
                 if active_ocr_strategy not in ["vision_only", "gemini_file"]:
@@ -1584,10 +1584,10 @@ def show_question_bank() -> None:
 
                 chunk_batch_size = st.slider(
                     "Batch Size (Pages per AI Chunk)",
-                    min_value=2,
-                    max_value=12,
-                    value=8 if active_ocr_strategy == "gemini_file" else 4,
-                    help="Pages processed per AI request. For Gemini Native File API, 6-12 pages allows fastest processing (~20 seconds for full papers). For local OCR, 3-5 pages is recommended.",
+                    min_value=1,
+                    max_value=10,
+                    value=3 if active_ocr_strategy != "gemini_file" else 4,
+                    help="For dense scanned books with 15-20 questions per page (e.g. Eduteria), keep Batch Size at 2-4 pages to prevent token limits.",
                 )
 
                 translate_hindi_choice = st.checkbox(
@@ -1596,6 +1596,8 @@ def show_question_bank() -> None:
                     help="If questions or options in the mock paper are in Hindi (or bilingual), automatically translates them into clear, academic English suitable for BPSC/UPSC study while preserving the original Hindi text for verification.",
                     key="pdf_translate_hindi",
                 )
+                if translate_hindi_choice:
+                    st.caption("💡 **Tip for Scanned Hindi Books (e.g. Eduteria, Ghatna Chakra):** If each page has 15–25 MCQs, keep Batch Size at **2–3 pages**. If introductory pages (index/theory) have no MCQs, use 'Custom Page Range' to start on the page where practice sets begin.")
 
             is_cancel_selected = dup_handling_mode.startswith("⛔")
             extract_clicked = st.button(
@@ -1686,6 +1688,12 @@ def show_question_bank() -> None:
 
                 if telemetry_items:
                     st.caption(" • ".join(telemetry_items))
+
+                ext_warnings = ext_stats.get("warnings", [])
+                if ext_warnings:
+                    with st.expander(f"⚠️ View {len(ext_warnings)} Processing Notice(s)", expanded=False):
+                        for w in ext_warnings:
+                            st.write(f"- {w}")
 
                 if len(duplicate_qs) > 0:
                     st.info(
