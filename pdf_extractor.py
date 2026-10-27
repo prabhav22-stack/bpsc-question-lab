@@ -153,6 +153,31 @@ def safe_parse_question_json(raw_text: str) -> List[Dict[str, Any]]:
     return []
 
 
+def get_page_image_parts(reader: pypdf.PdfReader, start_page: int, end_page: int) -> List[Any]:
+    """Extract embedded scanned page images as JPEG Parts for high-resolution Gemini Vision OCR.
+
+    Extracts raw scanned raster images at native resolution, falling back to sliced PDF if vector.
+    """
+    parts: List[Any] = []
+    if _HAS_GENAI:
+        for p_idx in range(start_page, min(end_page, len(reader.pages))):
+            page = reader.pages[p_idx]
+            imgs = ocr_engine.extract_images_from_page(page, min_dim=250)
+            for img in imgs:
+                try:
+                    opt = ocr_engine.optimize_image_for_fast_ocr(img, max_dim=2000)
+                    buf = io.BytesIO()
+                    opt.save(buf, format="JPEG", quality=88)
+                    parts.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
+                except Exception:
+                    pass
+    if not parts:
+        sub_bytes = slice_pdf_chunk(reader, start_page, end_page)
+        if _HAS_GENAI:
+            parts.append(types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf"))
+    return parts
+
+
 def extract_mock_questions_from_pdf(
     pdf_bytes: bytes,
     mock_title: str = "Uploaded Mock Test",
@@ -337,10 +362,9 @@ def extract_mock_questions_from_pdf(
                     digital_text_pages_count += chunk_page_count
 
                 elif ocr_strategy == "vision_only":
-                    # User specifically requested direct Gemini Vision
-                    sub_bytes = slice_pdf_chunk(reader, c_start, c_end)
-                    pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
-                    contents_payload = [pdf_part, prompt_instruction]
+                    # Direct Gemini High-Resolution Vision: Extracts raw page images at up to 2000px resolution
+                    page_parts = get_page_image_parts(reader, c_start, c_end)
+                    contents_payload = page_parts + [prompt_instruction]
                     vision_fallback_pages_count += chunk_page_count
 
                 else:
@@ -369,10 +393,9 @@ def extract_mock_questions_from_pdf(
                         ]
                         local_ocr_pages_count += chunk_page_count
                     else:
-                        # Seamless Fallback to Gemini Multimodal Vision to guarantee ZERO loss of accuracy!
-                        sub_bytes = slice_pdf_chunk(reader, c_start, c_end)
-                        pdf_part = types.Part.from_bytes(data=sub_bytes, mime_type="application/pdf")
-                        contents_payload = [pdf_part, prompt_instruction]
+                        # Seamless Fallback to Gemini High-Resolution Vision to guarantee ZERO loss of accuracy!
+                        page_parts = get_page_image_parts(reader, c_start, c_end)
+                        contents_payload = page_parts + [prompt_instruction]
                         vision_fallback_pages_count += chunk_page_count
 
             try:

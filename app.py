@@ -1615,6 +1615,8 @@ def show_question_bank() -> None:
                 if not config.is_gemini_configured():
                     st.error("Gemini AI is not configured. Please add your GEMINI_API_KEY in `.streamlit/secrets.toml` or `.env` to enable AI OCR & subject classification.")
                 else:
+                    st.session_state["extracted_mock_preview"] = None
+                    st.session_state["dismissed_ocr_job_id"] = None
                     pdf_bytes = uploaded_pdf.getvalue()
                     new_job_id = pdf_extractor.start_background_extraction_job(
                         pdf_bytes=pdf_bytes,
@@ -1644,6 +1646,9 @@ def show_question_bank() -> None:
             if not ext_questions:
                 st.warning("No multiple-choice questions were found in the selected pages of this document. Check the page range or ensure the pages contain questions.")
                 if st.button("Clear Preview", key="btn_clear_empty_prev"):
+                    if ext_stats.get("job_id"):
+                        db.clear_ocr_job(ext_stats["job_id"])
+                        st.session_state["dismissed_ocr_job_id"] = ext_stats["job_id"]
                     st.session_state["extracted_mock_preview"] = None
                     st.rerun()
             else:
