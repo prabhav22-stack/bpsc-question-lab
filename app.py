@@ -1021,14 +1021,39 @@ def show_dashboard() -> None:
                     "No critical weak spots detected with low accuracy! Keep practising to expand coverage."
                 )
 
-            # Subject Mastery Breakdown Bar Chart
-            with st.expander("📈 View Subject-Wise Accuracy & Question Bank Coverage", expanded=False):
+            # Comprehensive 11-Subject Syllabus Coverage & Readiness Matrix
+            with st.expander("📈 11-Subject Syllabus Coverage & Readiness Matrix", expanded=False):
                 try:
-                    subj_acc = attempts.groupby("subject").apply(
-                        lambda g: round((g["is_correct"] == 1).sum() / len(g) * 100)
-                    ).to_frame(name="Accuracy (%)")
-                    if not subj_acc.empty:
-                        st.bar_chart(subj_acc, color="#3b82f6", use_container_width=True)
+                    all_bank_qs = db.list_questions()
+                    bank_counts = all_bank_qs["subject"].value_counts().to_dict() if not all_bank_qs.empty else {}
+
+                    matrix_rows = []
+                    for s in db.SUBJECTS:
+                        q_avail = bank_counts.get(s, 0)
+                        s_att = attempts[attempts["subject"] == s] if not attempts.empty and "subject" in attempts.columns else pd.DataFrame()
+                        att_cnt = len(s_att)
+                        if att_cnt > 0:
+                            corr_cnt = (s_att["is_correct"] == 1).sum()
+                            acc = round(corr_cnt / att_cnt * 100, 1)
+                            if acc >= 70:
+                                status = "🟢 Proficient"
+                            elif acc >= 50:
+                                status = "🟡 Developing"
+                            else:
+                                status = "🔴 Needs Focus"
+                        else:
+                            acc = 0.0
+                            status = "⚪ Untested"
+
+                        matrix_rows.append({
+                            "Syllabus Subject": s,
+                            "Available MCQs": q_avail,
+                            "Attempted": att_cnt,
+                            "Accuracy (%)": f"{acc}%" if att_cnt > 0 else "-",
+                            "Readiness Status": status,
+                        })
+
+                    st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
                 except Exception:
                     pass
         else:
@@ -3485,6 +3510,35 @@ def show_practice() -> None:
                         f"⚠️ **Blind Spot Alert:** You answered **{len(blind_spots)}** question(s) incorrectly despite marking **High Confidence**. Review these first below!"
                     )
 
+        # Speed vs Accuracy Pacing Quadrants (Exam Strategy Matrix)
+        fast_correct = [r for r in items if r["is_correct"] and float(r.get("time_spent", 0)) <= 45.0]
+        slow_correct = [r for r in items if r["is_correct"] and float(r.get("time_spent", 0)) > 45.0]
+        fast_incorrect = [r for r in items if not r["is_correct"] and r["selected_option"] != "-" and float(r.get("time_spent", 0)) <= 30.0]
+        slow_incorrect = [r for r in items if not r["is_correct"] and r["selected_option"] != "-" and float(r.get("time_spent", 0)) > 60.0]
+
+        with st.expander("⏱️ Speed vs Accuracy Pacing Matrix (BPSC Target: 48s / Question)", expanded=True):
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric(
+                "⚡ Fast & Accurate (≤45s)",
+                len(fast_correct),
+                help="Mastered concepts answered swiftly and correctly. High exam efficiency!",
+            )
+            p2.metric(
+                "🎯 Careful & Correct (>45s)",
+                len(slow_correct),
+                help="Deliberate solving that yielded correct answers. Maintain this methodical approach.",
+            )
+            p3.metric(
+                "⚠️ Rushed Errors (≤30s)",
+                len(fast_incorrect),
+                help="Questions answered too quickly and missed. Likely caused by careless misreading.",
+            )
+            p4.metric(
+                "⏳ Time Sinks (>60s Missed)",
+                len(slow_incorrect),
+                help="Spent over a minute and still missed. Critical candidates for earlier elimination or skip.",
+            )
+
         st.divider()
 
         # Filterable Detailed Review per Question
@@ -3750,15 +3804,35 @@ def show_practice() -> None:
                     opt_keys = ["A", "B", "C", "D"]
                     default_idx = opt_keys.index(saved_ans) if saved_ans in opt_keys else None
 
+                    elim_dict = active_test.setdefault("eliminated", {})
+                    elim_for_q: List[str] = elim_dict.setdefault(qid, [])
+
                     selected_val = st.radio(
                         "Choose your answer:",
                         options=opt_keys,
-                        format_func=lambda k: f"{k}. {opts[k]}",
+                        format_func=lambda k: f"~~{k}. {opts[k]}~~ *(Eliminated)*" if k in elim_for_q else f"{k}. {opts[k]}",
                         index=default_idx,
                         key=f"omr_ans_{active_test['session_id']}_{qid}",
                     )
                     if selected_val:
                         answers[qid] = selected_val
+
+                    # Option Eliminator Scratchpad
+                    with st.expander("✂️ Distractor Eliminator Scratchpad", expanded=bool(elim_for_q)):
+                        st.caption("Cross out distractors to narrow down choices during problem solving:")
+                        el_cols = st.columns(4)
+                        for o_idx, opt_char in enumerate(["A", "B", "C", "D"]):
+                            is_el = opt_char in elim_for_q
+                            el_btn_lbl = f"❌ Drop ({opt_char})" if not is_el else f"↩️ Keep ({opt_char})"
+                            if el_cols[o_idx].button(el_btn_lbl, key=f"el_btn_{active_test['session_id']}_{qid}_{opt_char}", use_container_width=True):
+                                if is_el:
+                                    elim_for_q.remove(opt_char)
+                                else:
+                                    elim_for_q.append(opt_char)
+                                    if answers.get(qid) == opt_char:
+                                        answers.pop(qid, None)
+                                        st.session_state.pop(f"omr_ans_{active_test['session_id']}_{qid}", None)
+                                st.rerun()
 
                     c_conf, c_clr, c_rev = st.columns([2, 1, 1.2])
                     saved_conf = confidences.get(qid, "High")
@@ -4468,7 +4542,7 @@ def show_error_notebook() -> None:
                 "No questions are currently pinned. Pin tricky questions from the Question Bank, Test Scorecard, or Error Notebook to build your high-priority revision vault."
             )
         else:
-            p_hdr1, p_hdr2 = st.columns([3, 1])
+            p_hdr1, p_hdr2, p_hdr3 = st.columns([2.2, 1.3, 1.5])
             p_hdr1.write(f"You have **{len(pinned_df)}** pinned question(s) ready for rapid revision.")
             if p_hdr2.button("🚀 Drill Pinned Vault", type="primary", use_container_width=True):
                 p_ids = pinned_df["id"].astype(int).tolist()
@@ -4490,6 +4564,15 @@ def show_error_notebook() -> None:
                 }
                 st.session_state["test_results"] = None
                 navigate_to("Practice & Mock Tests")
+
+            pinned_anki = db.export_questions_to_anki_csv(pinned_df)
+            p_hdr3.download_button(
+                "🗂️ Export Pinned to Anki (.csv)",
+                data=pinned_anki.encode("utf-8"),
+                file_name="bpsc_pinned_vault_anki.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
             for _, prow in pinned_df.iterrows():
                 pqid = int(prow["id"])
@@ -5141,15 +5224,45 @@ def show_settings() -> None:
 
     st.divider()
 
-    # 3. Local SQLite Backup
+    # 3. Local SQLite Backup & Exports
     st.subheader("3. Local Data Backup & Export")
-    st.write("Create a full JSON snapshot of all questions, attempts, test sessions, and notebook notes.")
+    st.write("Export your database, full JSON snapshots, and Anki-compatible flashcard decks.")
+    
+    b_col1, b_col2, b_col3 = st.columns(3)
+    
+    # 1. JSON Snapshot
     json_data = db.export_sqlite_to_json()
-    st.download_button(
-        "⬇️ Download Complete SQLite Database Snapshot (JSON)",
+    b_col1.download_button(
+        "⬇️ Download JSON Snapshot",
         data=json_data.encode("utf-8"),
         file_name=f"question_lab_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
         mime="application/json",
+        use_container_width=True,
+    )
+
+    # 2. Raw SQLite .db File Download
+    try:
+        with open(db.DB_PATH, "rb") as db_file:
+            db_bytes = db_file.read()
+        b_col2.download_button(
+            "💾 Download Raw SQLite DB (.db)",
+            data=db_bytes,
+            file_name=f"question_lab_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
+            mime="application/x-sqlite3",
+            use_container_width=True,
+        )
+    except Exception as exc:
+        b_col2.error(f"DB read error: {exc}")
+
+    # 3. Anki Flashcard CSV Export
+    all_qs = db.list_questions()
+    anki_csv = db.export_questions_to_anki_csv(all_qs)
+    b_col3.download_button(
+        "🗂️ Export All to Anki (.csv)",
+        data=anki_csv.encode("utf-8"),
+        file_name=f"bpsc_anki_flashcards_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True,
     )
 
 

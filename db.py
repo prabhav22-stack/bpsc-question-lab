@@ -3402,6 +3402,62 @@ def export_sqlite_to_json() -> str:
         return json.dumps(export_data, indent=2)
 
 
+def export_questions_to_anki_csv(questions_data: Any) -> str:
+    """Format questions into an Anki-compatible CSV string with Front, Back, and Tags.
+
+    Front: Question stem and options A-D.
+    Back: Correct option, explanation, and distractor notes.
+    Tags: Hierarchical BPSC tags for subject and topic.
+    """
+    import io
+    out = io.StringIO()
+    writer = csv.writer(out, quoting=csv.QUOTE_ALL)
+    writer.writerow(["Front", "Back", "Tags"])
+
+    if isinstance(questions_data, pd.DataFrame):
+        rows = questions_data.to_dict("records")
+    elif isinstance(questions_data, list):
+        rows = questions_data
+    else:
+        rows = []
+
+    for r in rows:
+        stem = str(r.get("question", "")).strip()
+        opt_a = str(r.get("option_a", "")).strip()
+        opt_b = str(r.get("option_b", "")).strip()
+        opt_c = str(r.get("option_c", "")).strip()
+        opt_d = str(r.get("option_d", "")).strip()
+        cor = str(r.get("correct_option", "")).strip().upper()
+        exp = str(r.get("explanation", "")).strip()
+        notes = str(r.get("distractor_notes", "")).strip()
+        subj = str(r.get("subject", "General")).replace(" ", "_").replace("&", "and")
+        top = str(r.get("topic", "General")).replace(" ", "_")
+
+        front_html = (
+            f"<div style='font-size: 16px; font-weight: bold;'>{stem}</div><hr/>"
+            f"<div style='font-size: 14px; text-align: left;'>"
+            f"<b>(A)</b> {opt_a}<br/>"
+            f"<b>(B)</b> {opt_b}<br/>"
+            f"<b>(C)</b> {opt_c}<br/>"
+            f"<b>(D)</b> {opt_d}"
+            f"</div>"
+        )
+
+        cor_key = f"option_{cor.lower()}"
+        cor_text = str(r.get(cor_key, "")).strip() if cor_key in r else ""
+        back_html = (
+            f"<div style='font-size: 18px; color: #166534; font-weight: bold;'>Correct: {cor} - {cor_text}</div><hr/>"
+            f"<div style='font-size: 14px;'><b>Explanation:</b> {exp}</div>"
+        )
+        if notes:
+            back_html += f"<br/><div style='font-size: 13px; color: #854d0e;'><b>Distractor Notes:</b> {notes}</div>"
+
+        tags = f"BPSC::{subj} BPSC::{subj}::{top}"
+        writer.writerow([front_html, back_html, tags])
+
+    return out.getvalue()
+
+
 # -----------------------------------------------------------------------------
 # Background Persistent OCR Job Management
 # -----------------------------------------------------------------------------

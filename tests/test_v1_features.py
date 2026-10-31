@@ -807,6 +807,26 @@ class TestDatabaseV1Features(unittest.TestCase):
         self.assertIn("Number Series", topics)
         self.assertIn("Time and Work", topics)
 
+    def test_export_questions_to_anki_csv(self):
+        """Verify that export_questions_to_anki_csv exports valid Anki-compatible flashcard data."""
+        sample_q = [{
+            "question": "What is the capital of Bihar?",
+            "option_a": "Patna",
+            "option_b": "Gaya",
+            "option_c": "Munger",
+            "option_d": "Bhagalpur",
+            "correct_option": "A",
+            "explanation": "Patna (historically Pataliputra) is the state capital.",
+            "distractor_notes": "Gaya is a major pilgrimage center.",
+            "subject": "Bihar Special",
+            "topic": "Bihar Geography",
+        }]
+        csv_str = db.export_questions_to_anki_csv(sample_q)
+        self.assertIn('"Front","Back","Tags"', csv_str)
+        self.assertIn("Patna", csv_str)
+        self.assertIn("BPSC::Bihar_Special", csv_str)
+        self.assertIn("Pataliputra", csv_str)
+
 
 class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
     """Test suite for Mock Questions database features and PDF OCR extraction pipeline."""

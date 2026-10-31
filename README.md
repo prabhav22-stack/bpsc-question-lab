@@ -10,6 +10,8 @@ Combines official Google Gemini generative AI, deterministic examination analyti
 
 1. **Dual-Mode Examination Engine & Interactive CBT Simulation:**
    - **Interactive CBT Mode / OMR Question Palette:** Step-by-step examination view with live question jump palette (Answered 🟢, Unanswered ⚪, Marked for Review 🟣), live countdown/elapsed timers, and optional Instant Answer Reveal in Study Mode.
+   - **Distractor Eliminator Scratchpad:** Cross out eliminated options (A, B, C, D) in real-time scratchpad during problem-solving, simulating actual exam-day elimination strategies.
+   - **Speed vs Accuracy Pacing Quadrants:** Post-test evaluation categorizing attempts into *Fast & Accurate (≤45s)*, *Careful & Correct (>45s)*, *Rushed Errors (≤30s)*, and *Time Sinks (>60s Missed)* against the authentic BPSC benchmark of 48s/question.
    - **Classic Full Paper Scroll Mode:** Complete single-page test format for rapid offline-style mock drill.
    - Standard negative marking defaulting to authentic **-0.33 (1/3rd penalty)**.
    - Immediate **"Retry Missed / Skipped Questions"** action on test completion.
@@ -18,6 +20,8 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - Confidence levels (`High`, `Medium`, `Guess`) evaluated across post-test scorecards and dashboard.
    - **Blind Spot Alert:** Automatically pinpoints questions answered incorrectly despite marking `High` confidence.
    - **Guess Impact Telemetry:** Measures expected value per guess under negative marking rules to prevent negative penalty bleed.
+   - **Anki Spaced-Repetition Deck Exporter:** One-click export of Question Bank, Pinned Revision Vault, and Error Notebook to Anki flashcards (`.csv`) with HTML formatting and hierarchical BPSC tags.
+   - **11-Subject Syllabus Coverage & Readiness Matrix:** Real-time dashboard meter tracking question availability, attempts, and readiness status across all 11 official syllabus subjects.
 
 3. **Complete 4-Option Context Preservation in AI Tutor & Diagnosis:**
    - Full option maps (`A` through `D`) are preserved across test sessions, Error Notebook, and the AI Study Tutor.
