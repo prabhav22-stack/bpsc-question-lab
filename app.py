@@ -1431,6 +1431,21 @@ def show_question_bank() -> None:
                             st.session_state["dupe_scan_run"] = False
                             st.rerun()
 
+            # Rearrange & Classify Mental Ability & Mathematics Questions
+            with st.expander("📐 Rearrange & Classify Mental Ability & Mathematics Questions", expanded=False):
+                st.caption(
+                    "Automatically scan your database and reclassify all quantitative aptitude, arithmetic, reasoning, "
+                    "number series, clock, interest, and geometry questions into the dedicated 'General Mental Ability & Mathematics' section."
+                )
+                if st.button("🚀 Re-scan & Rearrange Questions Now", key="btn_rearrange_math_bank"):
+                    with st.spinner("Analyzing questions and reorganizing syllabus subjects..."):
+                        reclassified = db.rearrange_mental_ability_questions()
+                        if reclassified > 0:
+                            st.success(f"✅ Successfully reclassified {reclassified} question(s) into 'General Mental Ability & Mathematics'!")
+                        else:
+                            st.info("✅ All questions are already neatly categorized in their optimal syllabus subjects.")
+                    st.rerun()
+
             # Manage / Delete Uploaded Mock Series Expander
             with st.expander("⚙️ Manage & Delete Uploaded Mock Test Batches", expanded=False):
                 st.caption("Safely purge an uploaded mock test paper if you wish to re-upload or clear obsolete tests.")
@@ -2977,8 +2992,20 @@ SUBJECT_SUGGESTIONS: Dict[str, List[str]] = {
         "Gupta Golden Age & Nalanda/Vikramshila University",
         "Medieval Sultans, Sher Shah Suri & Mughals in Bihar",
     ],
+    "General Mental Ability & Mathematics": [
+        "Arithmetic & Number Series",
+        "Time, Work, Pipes & Cisterns",
+        "Speed, Time & Distance (Trains, Boats)",
+        "Percentage, Profit & Loss, Ratio & Proportion",
+        "Simple & Compound Interest",
+        "Permutations, Combinations & Probability",
+        "Clocks, Angles & Calendars",
+        "Logical Reasoning & Coding-Decoding",
+        "Direction Sense & Blood Relations",
+        "Geometry, Mensuration & Data Interpretation",
+    ],
     "Other": [
-        "General Mental Ability & Quantitative Aptitude",
+        "General Cross-Disciplinary Knowledge",
     ],
 }
 

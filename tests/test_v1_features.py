@@ -119,6 +119,22 @@ class TestSchemaValidation(unittest.TestCase):
         self.assertEqual(mq.original_language, "Hindi")
         self.assertIn("निर्वाचन आयोग", mq.original_question_hindi)
 
+    def test_mental_ability_subject_schema_normalization(self):
+        """Verify that General Mental Ability & Mathematics is supported and normalized from aliases."""
+        for alias in ["maths", "mental ability", "reasoning", "quantitative aptitude", "quant", "general mental ability & maths"]:
+            mq = schemas.ExtractedMockQuestion(
+                question="Find the missing number in series: 2, 4, 8, 16, ?",
+                option_a="24",
+                option_b="32",
+                option_c="30",
+                option_d="36",
+                correct_option="B",
+                explanation="Each term doubles: 16 * 2 = 32.",
+                subject=alias,
+                topic="Number Series",
+            )
+            self.assertEqual(mq.subject, "General Mental Ability & Mathematics")
+
 
 class TestAnalyticsCalculations(unittest.TestCase):
     """Test deterministic analytics engine."""
@@ -733,6 +749,63 @@ class TestDatabaseV1Features(unittest.TestCase):
             self.assertIsNotNone(active_pyq)
             self.assertEqual(active_pyq["job_id"], "job-pyq-1")
             self.assertEqual(active_pyq["job_type"], "pyq")
+
+    def test_rearrange_mental_ability_questions(self):
+        """Verify that rearrange_mental_ability_questions detects math and reasoning topics/stems and updates their subject."""
+        # Insert a math question misclassified under 'Other'
+        q1_id = db.insert_question(self.conn, {
+            "question": "At what time between 4 and 5 o'clock will the hands of a clock be together?",
+            "option_a": "21 (9/11) min",
+            "option_b": "20 min",
+            "option_c": "22 min",
+            "option_d": "23 min",
+            "correct_option": "A",
+            "subject": "Other",
+            "topic": "Clocks and Angles",
+        })
+        # Insert a series question misclassified under 'History'
+        q2_id = db.insert_question(self.conn, {
+            "question": "Find the missing term in the number series: 3, 10, 29, 66, 127, ?",
+            "option_a": "218",
+            "option_b": "216",
+            "option_c": "215",
+            "option_d": "220",
+            "correct_option": "A",
+            "subject": "History",
+            "topic": "Number Series",
+        })
+        # Insert a regular history question that should NOT be reclassified
+        q3_id = db.insert_question(self.conn, {
+            "question": "Who led the 1857 Revolt in Bihar from Jagdishpur?",
+            "option_a": "Kunwar Singh",
+            "option_b": "Amar Singh",
+            "option_c": "Pir Ali",
+            "option_d": "Maulvi Ahmadullah",
+            "correct_option": "A",
+            "subject": "Modern History",
+            "topic": "Revolt of 1857 in Bihar",
+        })
+
+        rearranged = db.rearrange_mental_ability_questions(self.conn)
+        self.assertEqual(rearranged, 2)
+
+        # Check subjects
+        row1 = self.conn.execute("SELECT subject FROM questions WHERE id = ?", (q1_id,)).fetchone()
+        row2 = self.conn.execute("SELECT subject FROM questions WHERE id = ?", (q2_id,)).fetchone()
+        row3 = self.conn.execute("SELECT subject FROM questions WHERE id = ?", (q3_id,)).fetchone()
+
+        self.assertEqual(row1["subject"], "General Mental Ability & Mathematics")
+        self.assertEqual(row2["subject"], "General Mental Ability & Mathematics")
+        self.assertEqual(row3["subject"], "Modern History")
+
+    def test_verified_pyq_includes_mental_ability(self):
+        """Verify that VERIFIED_BPSC_PYQS contains authentic questions under General Mental Ability & Mathematics."""
+        gma_pyqs = [q for q in db.VERIFIED_BPSC_PYQS if q["subject"] == "General Mental Ability & Mathematics"]
+        self.assertGreaterEqual(len(gma_pyqs), 10)
+        topics = {q["topic"] for q in gma_pyqs}
+        self.assertIn("Clocks and Angles", topics)
+        self.assertIn("Number Series", topics)
+        self.assertIn("Time and Work", topics)
 
 
 class TestMockQuestionsAndPDFExtractor(unittest.TestCase):

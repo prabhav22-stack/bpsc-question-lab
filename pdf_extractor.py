@@ -73,7 +73,8 @@ For every question found:
    - "General Science" (Physics, Chemistry, Biology, Diseases, Human anatomy, Scientific instruments)
    - "Environment" (Ecology, Biodiversity, Wildlife parks, Climate change, Environmental treaties)
    - "Current Affairs" (Recent summits, awards, sports, appointments, government initiatives, indices)
-   - "Other" (Reasoning, Aptitude, or unclassified)
+   - "General Mental Ability & Mathematics" (Arithmetic, Algebra, Geometry, Number Series, Profit & Loss, Time & Work, Speed & Distance, Clocks, Calendars, Permutations, Coding-Decoding, Blood Relations, Syllogisms, Logic & Reasoning)
+   - "Other" (Unclassified or general topics)
 6. Extract a concise topic in English (e.g. "Fundamental Rights", "Drain of Wealth", "Rivers of Bihar").
 7. Estimate difficulty ("Easy", "Medium", "Hard").
 """
@@ -287,9 +288,9 @@ def extract_mock_questions_from_pdf(
                 f"Analyze these mock examination paper pages ({chunk_label}) for '{mock_title}'.\n"
                 f"Target exam: {target_exam}.\n"
                 "Extract all multiple-choice questions found on these pages.\n"
-                "For each question, accurately categorize its 'subject' into one of the 10 standard syllabus subjects:\n"
+                "For each question, accurately categorize its 'subject' into one of the 11 standard syllabus subjects:\n"
                 "Modern History, Ancient & Medieval History, Bihar Special, Geography, Indian Polity, "
-                "Economy, General Science, Environment, Current Affairs, Other.\n"
+                "Economy, General Science, Environment, Current Affairs, General Mental Ability & Mathematics, Other.\n"
                 "If no questions are on these pages (e.g. cover page, blank page, instructions), return an empty list."
             )
             if translate_hindi:
