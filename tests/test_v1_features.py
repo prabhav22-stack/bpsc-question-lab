@@ -1406,6 +1406,184 @@ class TestMockQuestionsAndPDFExtractor(unittest.TestCase):
         db.clear_ocr_job(job_id)
 
 
+class TestOMRAndAnkiSimulationFeatures(unittest.TestCase):
+    """Test suite for offline exam simulation, OMR sheet generation, grading, and Anki .apkg export."""
+
+    def setUp(self):
+        self.sample_questions = [
+            {
+                "id": 1,
+                "question": "Who was the leader of the 1857 Revolt in Bihar?",
+                "option_a": "Kunwar Singh",
+                "option_b": "Nana Saheb",
+                "option_c": "Tatya Tope",
+                "option_d": "Bakht Khan",
+                "correct_option": "A",
+                "explanation": "Kunwar Singh of Jagdishpur led the 1857 revolt in Bihar.",
+                "subject": "Modern History",
+                "topic": "Revolt of 1857",
+                "difficulty": "Easy",
+            },
+            {
+                "id": 2,
+                "question": "Which article of the Indian Constitution provides for the Finance Commission?",
+                "option_a": "Article 280",
+                "option_b": "Article 324",
+                "option_c": "Article 110",
+                "option_d": "Article 356",
+                "correct_option": "A",
+                "explanation": "Article 280 provides for the constitution of a Finance Commission.",
+                "subject": "Indian Polity",
+                "topic": "Finance Commission",
+                "difficulty": "Medium",
+            },
+            {
+                "id": 3,
+                "question": "The Barabar caves in Bihar are associated with which religious sect?",
+                "option_a": "Ajivika",
+                "option_b": "Jainism",
+                "option_c": "Buddhism",
+                "option_d": "Vaishnavism",
+                "correct_option": "A",
+                "explanation": "Ashoka and Dasharatha dedicated caves at Barabar to Ajivikas.",
+                "subject": "Bihar Special",
+                "topic": "Ancient Bihar",
+                "difficulty": "Hard",
+            },
+        ]
+
+    def test_anki_apkg_generation_valid(self):
+        """Verify that anki_exporter generates a valid .apkg binary package with zip header."""
+        import anki_exporter
+        apkg_bytes = anki_exporter.generate_anki_apkg_bytes(self.sample_questions, deck_name="Test Deck")
+        self.assertIsInstance(apkg_bytes, bytes)
+        self.assertGreater(len(apkg_bytes), 1000)
+        # An .apkg package is a zip archive; first two bytes must be 'PK' (b'\x50\x4b')
+        self.assertEqual(apkg_bytes[:2], b"PK")
+
+    def test_anki_apkg_generation_from_dataframe(self):
+        """Verify anki_exporter handles pandas DataFrame input."""
+        import anki_exporter
+        import pandas as pd
+        df = pd.DataFrame(self.sample_questions)
+        apkg_bytes = anki_exporter.generate_anki_apkg_bytes(df, deck_name="DataFrame Deck")
+        self.assertEqual(apkg_bytes[:2], b"PK")
+
+    def test_anki_apkg_empty_handling(self):
+        """Verify handling empty list gracefully."""
+        import anki_exporter
+        with self.assertRaises(ValueError):
+            anki_exporter.generate_anki_apkg_bytes([], deck_name="Empty Deck")
+
+    def test_generate_bpsc_omr_pdf(self):
+        """Verify generating authentic A4 BPSC OMR PDF for various question counts."""
+        import omr_engine
+        for count in (25, 50, 150):
+            pdf_bytes = omr_engine.generate_bpsc_omr_pdf(
+                question_count=count,
+                exam_title="71st BPSC Prelims Simulation",
+                series="B",
+                candidate_roll="710428",
+            )
+            self.assertIsInstance(pdf_bytes, bytes)
+            self.assertGreater(len(pdf_bytes), 5000)
+            self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_generate_bpsc_question_paper_pdf(self):
+        """Verify generating printable BPSC question paper booklet PDF."""
+        import omr_engine
+        pdf_bytes = omr_engine.generate_bpsc_question_paper_pdf(
+            questions=self.sample_questions,
+            exam_title="71st BPSC CCE Prelims Mock Paper",
+            series="A",
+            duration_minutes=30,
+            max_marks=3.0,
+        )
+        self.assertIsInstance(pdf_bytes, bytes)
+        self.assertGreater(len(pdf_bytes), 1000)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_evaluate_omr_response_data(self):
+        """Verify deterministic evaluation of OMR responses with -0.33 negative marking."""
+        import omr_engine
+        official_key = {1: "A", 2: "A", 3: "A"}
+        # Q1 correct (A), Q2 incorrect (B), Q3 unattempted (-)
+        detected_answers = {1: "A", 2: "B", 3: "-"}
+        questions_map = {1: self.sample_questions[0], 2: self.sample_questions[1], 3: self.sample_questions[2]}
+
+        res = omr_engine.evaluate_omr_response_data(
+            detected_answers=detected_answers,
+            official_key=official_key,
+            questions_map=questions_map,
+            negative_rate=0.33,
+        )
+
+        self.assertEqual(res["total_questions"], 3)
+        self.assertEqual(res["attempted"], 2)
+        self.assertEqual(res["unattempted"], 1)
+        self.assertEqual(res["correct"], 1)
+        self.assertEqual(res["incorrect"], 1)
+        self.assertAlmostEqual(res["penalty_lost"], 0.33, places=2)
+        # Net score: 1.00 - 0.33 = 0.67
+        self.assertAlmostEqual(res["net_score"], 0.67, places=2)
+        self.assertAlmostEqual(res["accuracy"], 50.0, places=1)
+        self.assertEqual(len(res["breakdown"]), 3)
+
+    def test_mocked_extract_answers_from_omr_document(self):
+        """Verify Gemini Vision multimodal bubble extraction with mocked client."""
+        import omr_engine
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = json.dumps({
+            "detected_answers": {
+                "1": "A",
+                "2": "C",
+                "3": "-",
+            }
+        })
+        mock_client.models.generate_content.return_value = mock_resp
+
+        detected = omr_engine.extract_answers_from_omr_document(
+            file_bytes=b"dummy_image_data",
+            file_name="omr_scan.png",
+            total_questions=3,
+            client=mock_client,
+        )
+        self.assertEqual(detected[1], "A")
+        self.assertEqual(detected[2], "C")
+        self.assertEqual(detected[3], "-")
+
+    def test_mocked_generate_omr_ai_analysis(self):
+        """Verify generating AI coaching analysis report with mocked Gemini client."""
+        import omr_engine
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = "### 1. Executive Scorecard\nCandidate scored 0.67 marks."
+        mock_client.models.generate_content.return_value = mock_resp
+
+        eval_res = {
+            "total_questions": 3,
+            "attempted": 2,
+            "unattempted": 1,
+            "correct": 1,
+            "incorrect": 1,
+            "accuracy": 50.0,
+            "penalty_lost": 0.33,
+            "net_score": 0.67,
+            "breakdown": [
+                {"q_num": 1, "question": "Q1", "subject": "History", "status": "Correct", "detected_option": "A", "correct_option": "A"},
+                {"q_num": 2, "question": "Q2", "subject": "Polity", "status": "Incorrect", "detected_option": "B", "correct_option": "A"},
+                {"q_num": 3, "question": "Q3", "subject": "Bihar Special", "status": "Unattempted", "detected_option": "-", "correct_option": "A"},
+            ]
+        }
+
+        report = omr_engine.generate_omr_ai_analysis(
+            eval_result=eval_res,
+            exam_title="Test Exam",
+            client=mock_client,
+        )
+        self.assertIn("Executive Scorecard", report)
+
 
 if __name__ == "__main__":
     unittest.main()

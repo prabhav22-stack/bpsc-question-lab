@@ -24,9 +24,11 @@ import importlib
 
 import ai_service
 import analytics
+import anki_exporter
 import config
 import db
 import ocr_engine
+import omr_engine
 import pdf_extractor
 import revision_engine
 import schemas
@@ -39,6 +41,8 @@ try:
     importlib.reload(config)
     importlib.reload(ai_service)
     importlib.reload(ocr_engine)
+    importlib.reload(omr_engine)
+    importlib.reload(anki_exporter)
     importlib.reload(pdf_extractor)
     importlib.reload(revision_engine)
     importlib.reload(schemas)
@@ -274,6 +278,7 @@ NAV_PAGES = [
     "AI Question Studio",
     "Current Affairs Lab",
     "Practice & Mock Tests",
+    "🖨️ Offline Exam & OMR Simulation",
     "AI Study Tutor",
     "AI Performance Coach",
     "Error Notebook",
@@ -2849,22 +2854,34 @@ def show_question_bank() -> None:
                         _render_question_card_view(q_row, show_actions=True, key_prefix="all_bank")
 
             st.divider()
-            col_exp1, col_exp2 = st.columns(2)
+            col_exp1, col_exp2, col_exp3 = st.columns(3)
             with col_exp1:
                 csv_bytes = filtered.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    f"⬇️ Export Current View ({len(filtered)} Qs) to CSV",
+                    f"⬇️ Export View ({len(filtered)} Qs) to CSV",
                     data=csv_bytes,
                     file_name="bpsc_question_bank_export.csv",
                     mime="text/csv",
                     use_container_width=True,
                 )
             with col_exp2:
+                try:
+                    apkg_bytes = anki_exporter.generate_anki_apkg_bytes(filtered, deck_name="BPSC Filtered Bank")
+                    st.download_button(
+                        f"📦 Export View ({len(filtered)} Qs) to Anki (.apkg)",
+                        data=apkg_bytes,
+                        file_name="bpsc_bank_anki_deck.apkg",
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                    )
+                except Exception as anki_err:
+                    st.caption(f"Anki generation note: {anki_err}")
+            with col_exp3:
                 attempts = db.get_attempts()
                 if not attempts.empty:
                     att_csv = attempts.to_csv(index=False).encode("utf-8")
                     st.download_button(
-                        "⬇️ Export Attempt History to CSV",
+                        "⬇️ Export Attempts to CSV",
                         data=att_csv,
                         file_name="bpsc_attempts_export.csv",
                         mime="text/csv",
@@ -4115,6 +4132,557 @@ def show_practice() -> None:
 
 
 # -----------------------------------------------------------------------------
+# Views: 4B. Offline Exam & OMR Simulation (Authentic Paper & Optical Grading)
+# -----------------------------------------------------------------------------
+
+def show_offline_exam_simulation() -> None:
+    """Dedicated offline examination simulator with printable booklets, OMR sheets, and AI grading."""
+    st.title("🖨️ Offline Exam & OMR Simulation")
+    st.caption(
+        "Simulate authentic BPSC Prelims exam conditions: generate custom prompt-driven or vault-based question booklets, "
+        "print optical A4 OMR answer sheets with bubble grids, and upload evaluated answer sheets for Gemini AI diagnostics."
+    )
+
+    tab_paper, tab_evaluate = st.tabs([
+        "📄 Create Paper & Print OMR Sheet",
+        "📤 Upload Checked Answers & AI Coaching",
+    ])
+
+    # =========================================================================
+    # TAB 1: Create Paper & Print OMR Sheet
+    # =========================================================================
+    with tab_paper:
+        st.subheader("1. Configure Examination Paper & Question Source")
+        
+        source_mode = st.radio(
+            "Select Question Origin:",
+            ["🤖 AI Custom Prompt Generator", "📚 From Question Bank & Previous Vaults"],
+            horizontal=True,
+            key="offline_source_mode_radio",
+        )
+
+        if source_mode == "🤖 AI Custom Prompt Generator":
+            st.markdown(
+                """
+                <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                    <div style="font-weight: 700; color: #60a5fa; margin-bottom: 4px;">🎯 Prompt-Driven Question Generation</div>
+                    <div style="font-size: 13px; color: #cbd5e1;">
+                        Enter custom instructions below describing the exact tone, subject mix, difficulty, and question styles you want generated.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            prompt_input = st.text_area(
+                "🎯 Enter Custom Instructions for Question Generation:",
+                value="Generate tough conceptual questions on Bihar History (1857 Revolt in Bihar, Kunwar Singh, Champaran Satyagraha, Kisan Sabha movement) and Modern Indian Polity, with multi-statement analysis and negative marking traps.",
+                height=90,
+                help="Specify specific topics, historical events, articles, or tricky negative marking patterns.",
+            )
+
+            c_sub1, c_sub2 = st.columns([1.5, 1.5])
+            with c_sub1:
+                subject_mix = st.selectbox(
+                    "Subject Focus / Mix:",
+                    [
+                        "Mix of All Subjects (Full BPSC Syllabus)",
+                        "Bihar Special (History, Geography, Economy)",
+                        "Modern Indian History & National Movement",
+                        "General Mental Ability & Mathematics",
+                        "General Science (Biology, Chemistry, Physics)",
+                        "Indian Polity & Constitution",
+                        "Indian Geography & Bihar Geography",
+                        "Indian Economy & Bihar Budget",
+                        "Current Affairs (National, Bihar & International)",
+                    ],
+                )
+                q_types = st.multiselect(
+                    "Question Formats to Include:",
+                    [
+                        "Standard 4-Option MCQ",
+                        "Multi-Statement ('1 and 2 only', 'All of the above')",
+                        "Assertion & Reason (Statement I & Statement II)",
+                        "Chronological Sequence Ordering",
+                        "Match the Lists (List-I / List-II)",
+                        "Mental Ability / Numerical Reasoning",
+                    ],
+                    default=["Standard 4-Option MCQ", "Multi-Statement ('1 and 2 only', 'All of the above')"],
+                )
+            with c_sub2:
+                q_count = st.select_slider(
+                    "Number of Questions to Generate:",
+                    options=[5, 10, 15, 20, 25, 30, 50],
+                    value=10,
+                )
+                exam_target = st.selectbox(
+                    "Exam Benchmark Standard:",
+                    ["BPSC 71st Prelims (Analytical Pattern)", "BPSC 70th CCE", "UPSC Prelims Standard"],
+                )
+                diff_standard = st.selectbox(
+                    "Difficulty Tone:",
+                    ["Challenging / Negative Marking Traps", "Standard Balanced Prelims", "Foundational / High-Yield Facts"],
+                )
+
+            if st.button("⚡ Generate Custom Exam Paper with Gemini", type="primary", use_container_width=True):
+                with st.spinner(f"Synthesizing {q_count} custom examination questions calibrated to {exam_target}..."):
+                    try:
+                        q_type_str = ", ".join(q_types) if q_types else "Standard 4-Option MCQ"
+                        full_notes = (
+                            f"User Custom Instructions: {prompt_input}\n"
+                            f"Question Formats: {q_type_str}\n"
+                            f"Difficulty Tone: {diff_standard}\n"
+                            f"Subject Focus: {subject_mix}\n"
+                            "Adhere strictly to official 4-option BPSC Prelims structure with -0.33 mark penalty for wrong answers."
+                        )
+                        
+                        target_subj = subject_mix if "Mix" not in subject_mix else "General Studies"
+                        # Generate in batches of at most 10 to ensure complete, valid responses
+                        batch_size = 10 if q_count > 10 else q_count
+                        accumulated_qs: List[Dict[str, Any]] = []
+                        
+                        while len(accumulated_qs) < q_count:
+                            needed = min(batch_size, q_count - len(accumulated_qs))
+                            g_set = ai_service.generate_question_set(
+                                exam="BPSC",
+                                subject=target_subj,
+                                topic="Offline Simulation Paper",
+                                count=needed,
+                                difficulty="Hard" if "Challenging" in diff_standard else "Medium",
+                                question_type=q_type_str,
+                                notes_or_context=full_notes,
+                            )
+                            for q in g_set.questions:
+                                accumulated_qs.append({
+                                    "id": int(time.time() * 1000) % 10000000 + len(accumulated_qs),
+                                    "question": q.question,
+                                    "option_a": q.option_a,
+                                    "option_b": q.option_b,
+                                    "option_c": q.option_c,
+                                    "option_d": q.option_d,
+                                    "correct_option": q.correct_option,
+                                    "explanation": q.explanation,
+                                    "subject": q.subject or target_subj,
+                                    "topic": q.topic or "Offline Mock",
+                                    "subtopic": q.subtopic,
+                                    "difficulty": q.difficulty,
+                                    "distractor_notes": q.distractor_notes,
+                                    "concept_tested": q.concept_tested,
+                                    "source_type": "AI-generated",
+                                    "source_name": "Gemini Prompt Generator",
+                                    "exam": "BPSC",
+                                })
+
+                        st.session_state["offline_paper_questions"] = accumulated_qs
+                        st.success(f"Successfully generated {len(accumulated_qs)} questions for your offline paper!")
+                    except Exception as exc:
+                        st.error(f"Generation error: {exc}")
+
+        else:
+            # Question Bank & Vaults mode
+            st.markdown(
+                """
+                <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                    <div style="font-weight: 700; color: #34d399; margin-bottom: 4px;">📚 Assemble from Authenticated Question Vaults</div>
+                    <div style="font-size: 13px; color: #cbd5e1;">
+                        Select questions from Official BPSC PYQs, BPSC-Adjacent State PCS PYQs, Mock Exams, or your Pinned Vault.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            b_col1, b_col2, b_col3, b_col4 = st.columns(4)
+            with b_col1:
+                vault_filter = st.selectbox(
+                    "Source Vault:",
+                    ["All Questions", "Official PYQ", "Mock question", "BPSC-Adjacent PYQ", "Pinned in Error Notebook"],
+                )
+            with b_col2:
+                subject_filter = st.selectbox("Subject:", ["All"] + db.SUBJECTS)
+            with b_col3:
+                diff_filter = st.selectbox("Difficulty:", ["All", "Easy", "Medium", "Hard"])
+            with b_col4:
+                bank_q_count = st.select_slider("Question Count:", options=[5, 10, 15, 20, 25, 30, 50, 100, 150], value=25)
+
+            shuffle_order = st.checkbox("Randomize / Shuffle question order", value=True)
+
+            if st.button("📋 Load Selected Questions into Offline Paper", type="primary", use_container_width=True):
+                with st.spinner("Retrieving and formatting questions from database..."):
+                    if vault_filter == "Pinned in Error Notebook":
+                        df_loaded = db.get_pinned_questions()
+                    else:
+                        stype = vault_filter if vault_filter != "All Questions" else "All"
+                        df_loaded = db.list_questions(
+                            subject=subject_filter,
+                            difficulty=diff_filter,
+                            source_type=stype,
+                        )
+
+                    if df_loaded.empty:
+                        st.warning("No questions matched the selected filters. Please adjust your criteria.")
+                    else:
+                        if shuffle_order:
+                            df_loaded = df_loaded.sample(frac=1.0, random_state=random.randint(1, 9999)).reset_index(drop=True)
+                        sliced_df = df_loaded.head(bank_q_count)
+                        st.session_state["offline_paper_questions"] = sliced_df.to_dict(orient="records")
+                        st.success(f"Loaded {len(st.session_state['offline_paper_questions'])} questions into your offline paper!")
+
+        # ---------------------------------------------------------------------
+        # Paper Customization & Printable PDF Downloads
+        # ---------------------------------------------------------------------
+        st.divider()
+        st.subheader("2. Paper Metadata & Printable Downloads")
+
+        active_qs = st.session_state.get("offline_paper_questions", [])
+
+        if not active_qs:
+            st.info("💡 Please generate or load questions above to configure your printable booklet and OMR sheet.")
+        else:
+            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            with m_col1:
+                p_title = st.text_input("Examination Title:", value="71st BPSC Combined Competitive Prelims (Offline Mock)")
+            with m_col2:
+                p_series = st.selectbox("Booklet Series:", ["A", "B", "C", "D"], index=0)
+            with m_col3:
+                p_roll = st.text_input("Candidate Roll No (7 digits):", value="710428", max_chars=7)
+            with m_col4:
+                default_mins = max(15, int(len(active_qs) * 0.8))
+                p_duration = st.number_input("Time Allowed (Minutes):", min_value=10, max_value=180, value=default_mins, step=5)
+
+            # Paper metrics bar
+            total_marks = len(active_qs) * 1.0
+            st.markdown(
+                f"""
+                <div style="display: flex; gap: 15px; background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; padding: 10px 16px; border-radius: 8px; margin: 12px 0;">
+                    <div><span style="color: #94a3b8; font-size: 12px;">Total Questions:</span> <b style="color: #f8fafc; font-size: 15px;">{len(active_qs)}</b></div>
+                    <div><span style="color: #94a3b8; font-size: 12px;">Full Marks:</span> <b style="color: #10b981; font-size: 15px;">+{total_marks:.1f}</b></div>
+                    <div><span style="color: #94a3b8; font-size: 12px;">Negative Marking:</span> <b style="color: #ef4444; font-size: 15px;">-0.33 Mark</b></div>
+                    <div><span style="color: #94a3b8; font-size: 12px;">Series:</span> <b style="color: #38bdf8; font-size: 15px;">{p_series}</b></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # PDF and Deck generation
+            d_col1, d_col2, d_col3 = st.columns(3)
+            with d_col1:
+                try:
+                    omr_bytes = omr_engine.generate_bpsc_omr_pdf(
+                        question_count=len(active_qs),
+                        exam_title=p_title,
+                        series=p_series,
+                        candidate_roll=p_roll,
+                    )
+                    st.download_button(
+                        "🖨️ Download BPSC OMR Sheet (PDF)",
+                        data=omr_bytes,
+                        file_name=f"bpsc_omr_sheet_series_{p_series}.pdf",
+                        mime="application/pdf",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                except Exception as omr_err:
+                    st.error(f"OMR PDF Error: {omr_err}")
+
+            with d_col2:
+                try:
+                    booklet_bytes = omr_engine.generate_bpsc_question_paper_pdf(
+                        questions=active_qs,
+                        exam_title=p_title,
+                        series=p_series,
+                        duration_minutes=int(p_duration),
+                        max_marks=total_marks,
+                    )
+                    st.download_button(
+                        "📄 Download Question Booklet (PDF)",
+                        data=booklet_bytes,
+                        file_name=f"bpsc_question_paper_series_{p_series}.pdf",
+                        mime="application/pdf",
+                        type="secondary",
+                        use_container_width=True,
+                    )
+                except Exception as bk_err:
+                    st.error(f"Booklet PDF Error: {bk_err}")
+
+            with d_col3:
+                try:
+                    deck_bytes = anki_exporter.generate_anki_apkg_bytes(
+                        questions=active_qs,
+                        deck_name=f"BPSC::{p_title} (Series {p_series})",
+                    )
+                    st.download_button(
+                        "📦 Download Native Anki (.apkg)",
+                        data=deck_bytes,
+                        file_name=f"bpsc_paper_series_{p_series}.apkg",
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                    )
+                except Exception as anki_err:
+                    st.error(f"Anki Error: {anki_err}")
+
+            # Activate for Evaluation button
+            if st.button("📌 Set as Active Paper for OMR Evaluation & Analysis", type="primary", use_container_width=True):
+                official_key_map = {}
+                for i, q in enumerate(active_qs, 1):
+                    official_key_map[i] = str(q.get("correct_option", "A")).strip().upper()
+
+                st.session_state["active_offline_paper"] = {
+                    "title": p_title,
+                    "series": p_series,
+                    "roll": p_roll,
+                    "duration": int(p_duration),
+                    "questions": active_qs,
+                    "official_key": official_key_map,
+                }
+                st.success("✅ Active reference paper set! Take your test offline on paper, then switch to Tab 2 to upload your checked answer sheet.")
+
+            with st.expander(f"👁️ Preview Questions in Booklet ({len(active_qs)} total)"):
+                for idx, q_item in enumerate(active_qs, 1):
+                    st.markdown(f"**Q{idx}. {q_item.get('question', '')}**")
+                    c_opt1, c_opt2 = st.columns(2)
+                    c_opt1.write(f"(A) {q_item.get('option_a', '')}")
+                    c_opt1.write(f"(B) {q_item.get('option_b', '')}")
+                    c_opt2.write(f"(C) {q_item.get('option_c', '')}")
+                    c_opt2.write(f"(D) {q_item.get('option_d', '')}")
+                    st.caption(f"**Correct:** {q_item.get('correct_option', '')} | **Subject:** {q_item.get('subject', '')} | **Explanation:** {q_item.get('explanation', '')}")
+                    st.divider()
+
+    # =========================================================================
+    # TAB 2: Upload Checked Answers & AI Coaching
+    # =========================================================================
+    with tab_evaluate:
+        st.subheader("Upload Scanned OMR Sheet or Checked Answers")
+        st.write(
+            "Upload your filled A4 OMR sheet or photographed answer paper. "
+            "Our Gemini Vision Multimodal engine reads marked bubbles, tallies marks under official BPSC negative marking (-0.33 mark), "
+            "and generates an authoritative AI strategic diagnosis."
+        )
+
+        active_paper = st.session_state.get("active_offline_paper")
+        if not active_paper:
+            # Fallback if paper generated in Tab 1 wasn't formally set
+            if st.session_state.get("offline_paper_questions"):
+                qs = st.session_state["offline_paper_questions"]
+                active_paper = {
+                    "title": "Offline Practice Mock",
+                    "series": "A",
+                    "roll": "710428",
+                    "duration": 60,
+                    "questions": qs,
+                    "official_key": {i: str(q.get("correct_option", "A")).strip().upper() for i, q in enumerate(qs, 1)},
+                }
+                st.session_state["active_offline_paper"] = active_paper
+
+        if not active_paper:
+            st.warning("⚠️ No active offline paper found. Please generate or load questions in Tab 1 first.")
+        else:
+            st.markdown(
+                f"""
+                <div style="background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                    <div style="font-weight: 700; color: #60a5fa; margin-bottom: 4px;">📋 Active Reference Paper</div>
+                    <div style="font-size: 13px; color: #f1f5f9;">
+                        <b>{active_paper['title']}</b> · Series: <span style="color: #38bdf8; font-weight: 700;">{active_paper['series']}</span> · 
+                        Questions: <b>{len(active_paper['questions'])}</b> · Roll: <code>{active_paper['roll']}</code>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            up_col1, up_col2 = st.columns([2, 1])
+            with up_col1:
+                uploaded_omr = st.file_uploader(
+                    "Upload Scanned / Photographed OMR Sheet or PDF:",
+                    type=["pdf", "png", "jpg", "jpeg"],
+                    help="Upload a clear scan or photo of your filled OMR sheet.",
+                )
+            with up_col2:
+                neg_choice = st.selectbox(
+                    "Negative Penalty Rate:",
+                    [0.33, 0.25, 0.0],
+                    format_func=lambda x: f"-{x} Marks (Standard BPSC)" if x == 0.33 else f"-{x} Marks",
+                )
+
+            # Verification / Manual Input fallback expander
+            total_expected_q = len(active_paper["questions"])
+            with st.expander("✏️ Inspect / Manually Enter Marked Bubbles (Optional Verification)"):
+                st.caption("You can verify or manually modify detected responses for each question before grading.")
+                manual_answers = st.session_state.get("omr_detected_answers", {})
+                
+                # Render in compact 5-column layout
+                cols = st.columns(5)
+                for q_num in range(1, total_expected_q + 1):
+                    c_idx = (q_num - 1) % 5
+                    with cols[c_idx]:
+                        default_val = manual_answers.get(q_num, "-")
+                        val_idx = ["-", "A", "B", "C", "D"].index(default_val) if default_val in ["-", "A", "B", "C", "D"] else 0
+                        chosen = st.selectbox(
+                            f"Q{q_num}",
+                            ["-", "A", "B", "C", "D"],
+                            index=val_idx,
+                            key=f"omr_manual_q_{q_num}",
+                        )
+                        manual_answers[q_num] = chosen
+                st.session_state["omr_detected_answers"] = manual_answers
+
+            if st.button("🔍 Evaluate OMR & Generate AI Strategic Coaching Report", type="primary", use_container_width=True):
+                detected_dict: Dict[int, str] = {}
+                with st.spinner("Processing OMR sheet and grading responses..."):
+                    if uploaded_omr is not None:
+                        try:
+                            file_bytes = uploaded_omr.getvalue()
+                            detected_dict = omr_engine.extract_answers_from_omr_document(
+                                file_bytes=file_bytes,
+                                file_name=uploaded_omr.name,
+                                total_questions=total_expected_q,
+                            )
+                            st.session_state["omr_detected_answers"] = detected_dict
+                            st.success("✅ Optical mark recognition complete! Extracted bubbles successfully.")
+                        except Exception as ocr_err:
+                            st.warning(f"Optical scan note: {ocr_err}. Falling back to manual answer grid.")
+                            detected_dict = st.session_state.get("omr_detected_answers", {})
+                    else:
+                        detected_dict = st.session_state.get("omr_detected_answers", {})
+                        if not any(v in ("A", "B", "C", "D") for v in detected_dict.values()):
+                            st.error("Please either upload a scanned OMR document or mark your answers in the inspection grid above.")
+                            return
+
+                    # Deterministic Grading
+                    questions_map = {i: q for i, q in enumerate(active_paper["questions"], 1)}
+                    eval_result = omr_engine.evaluate_omr_response_data(
+                        detected_answers=detected_dict,
+                        official_key=active_paper["official_key"],
+                        questions_map=questions_map,
+                        negative_rate=neg_choice,
+                    )
+                    st.session_state["omr_evaluation_result"] = eval_result
+
+                # AI Performance Coaching Diagnosis
+                with st.spinner("Consulting Gemini AI Exam Coach for in-depth diagnostic analysis..."):
+                    coaching_report = omr_engine.generate_omr_ai_analysis(
+                        eval_result=eval_result,
+                        exam_title=active_paper["title"],
+                    )
+                    st.session_state["omr_ai_feedback"] = coaching_report
+
+            # -----------------------------------------------------------------
+            # Display Evaluation Results & Coaching Report
+            # -----------------------------------------------------------------
+            eval_res = st.session_state.get("omr_evaluation_result")
+            if eval_res:
+                st.divider()
+                st.markdown("### 🏆 Examination Scorecard")
+
+                s_c1, s_c2, s_c3, s_c4, s_c5 = st.columns(5)
+                s_c1.metric(
+                    "Net Score",
+                    f"{eval_res['net_score']:.2f} / {eval_res['total_questions']}",
+                    f"{eval_res['accuracy']:.1f}% Accuracy",
+                )
+                s_c2.metric(
+                    "Correct (+1.00)",
+                    f"{eval_res['correct']}",
+                    f"+{eval_res['correct']:.2f} Pts",
+                )
+                s_c3.metric(
+                    "Incorrect (-0.33)",
+                    f"{eval_res['incorrect']}",
+                    f"-{eval_res['penalty_lost']:.2f} Bleed",
+                    delta_color="inverse",
+                )
+                s_c4.metric(
+                    "Unattempted",
+                    f"{eval_res['unattempted']}",
+                    "Safe Skips",
+                )
+                attempt_rate = (eval_res['attempted'] / max(1, eval_res['total_questions'])) * 100
+                s_c5.metric(
+                    "Attempt Rate",
+                    f"{attempt_rate:.1f}%",
+                    f"{eval_res['attempted']} of {eval_res['total_questions']}",
+                )
+
+                # AI Coaching Feedback Card
+                ai_report = st.session_state.get("omr_ai_feedback", "")
+                if ai_report:
+                    st.markdown("### 🧠 AI Strategic Performance Diagnosis")
+                    st.markdown(
+                        f"""
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px; padding: 18px; margin-bottom: 16px;">
+                            <div style="font-weight: 800; font-size: 16px; color: #60a5fa; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                                <span>🎯 Lead Exam Strategist Feedback (Gemini Flash)</span>
+                            </div>
+                            <div style="color: #e2e8f0; font-size: 14px; line-height: 1.6;">
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(ai_report)
+                    st.markdown("</div></div>", unsafe_allow_html=True)
+
+                # Commit to Database & Attempt History Button
+                if st.button("💾 Commit Attempts to Database & Error Notebook", type="primary", use_container_width=True):
+                    with st.spinner("Recording attempt entries and updating revision planner..."):
+                        session_id = str(uuid.uuid4())[:8]
+                        with db.connect_db() as conn:
+                            for item in eval_res.get("breakdown", []):
+                                q_num = item["q_num"]
+                                q_orig = active_paper["questions"][q_num - 1]
+                                qid = q_orig.get("id")
+
+                                # If AI generated question not in db, insert it
+                                if not qid or qid > 10000000:
+                                    try:
+                                        qid = db.insert_question(conn, q_orig)
+                                    except Exception:
+                                        qid = None
+
+                                if qid:
+                                    marked = item["detected_option"]
+                                    corr = item["correct_option"]
+                                    score_val = 1.0 if marked == corr else (-neg_choice if marked in ("A", "B", "C", "D") else 0.0)
+                                    db.record_attempt(
+                                        question_id=int(qid),
+                                        selected_option=marked,
+                                        correct_option=corr,
+                                        test_session_id=session_id,
+                                        time_spent_seconds=float(active_paper["duration"] * 60 / max(1, eval_res["total_questions"])),
+                                        confidence_rating="Medium",
+                                        score=score_val,
+                                    )
+
+                        # Record overall session
+                        db.record_test_session(
+                            session_id=session_id,
+                            exam="BPSC",
+                            test_mode=f"Offline OMR Simulation (Series {active_paper['series']})",
+                            total_questions=eval_res["total_questions"],
+                            correct_count=eval_res["correct"],
+                            incorrect_count=eval_res["incorrect"],
+                            unanswered_count=eval_res["unattempted"],
+                            negative_mark_rate=neg_choice,
+                            total_score=eval_res["net_score"],
+                            time_spent_seconds=float(active_paper["duration"] * 60),
+                        )
+                        st.success("🎉 Completed test session and all question attempts successfully logged! Your Dashboard, Error Notebook, and 7-day Revision Planner are now updated.")
+
+                # Question Breakdown Audit Table
+                with st.expander("📋 Detailed Question-by-Question Audit Table"):
+                    table_rows = []
+                    for b in eval_res.get("breakdown", []):
+                        st_icon = "✅" if b["status"] == "Correct" else ("❌" if b["status"] == "Incorrect" else "⚪")
+                        table_rows.append({
+                            "Q#": b["q_num"],
+                            "Subject": b["subject"],
+                            "Topic": b["topic"],
+                            "Marked": b["detected_option"],
+                            "Correct": b["correct_option"],
+                            "Result": f"{st_icon} {b['status']}",
+                        })
+                    st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
+
+
+# -----------------------------------------------------------------------------
 # Views: 5. AI Study Tutor (Complete Options Context Passing)
 # -----------------------------------------------------------------------------
 
@@ -4542,7 +5110,7 @@ def show_error_notebook() -> None:
                 "No questions are currently pinned. Pin tricky questions from the Question Bank, Test Scorecard, or Error Notebook to build your high-priority revision vault."
             )
         else:
-            p_hdr1, p_hdr2, p_hdr3 = st.columns([2.2, 1.3, 1.5])
+            p_hdr1, p_hdr2, p_hdr3, p_hdr4 = st.columns([2.0, 1.2, 1.3, 1.3])
             p_hdr1.write(f"You have **{len(pinned_df)}** pinned question(s) ready for rapid revision.")
             if p_hdr2.button("🚀 Drill Pinned Vault", type="primary", use_container_width=True):
                 p_ids = pinned_df["id"].astype(int).tolist()
@@ -4567,12 +5135,23 @@ def show_error_notebook() -> None:
 
             pinned_anki = db.export_questions_to_anki_csv(pinned_df)
             p_hdr3.download_button(
-                "🗂️ Export Pinned to Anki (.csv)",
+                "🗂️ Anki (.csv)",
                 data=pinned_anki.encode("utf-8"),
                 file_name="bpsc_pinned_vault_anki.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
+            try:
+                pinned_apkg = anki_exporter.generate_anki_apkg_bytes(pinned_df, deck_name="BPSC Pinned Revision Vault")
+                p_hdr4.download_button(
+                    "📦 Anki (.apkg)",
+                    data=pinned_apkg,
+                    file_name="bpsc_pinned_vault.apkg",
+                    mime="application/octet-stream",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                p_hdr4.caption(f"Anki note: {e}")
 
             for _, prow in pinned_df.iterrows():
                 pqid = int(prow["id"])
@@ -5228,12 +5807,12 @@ def show_settings() -> None:
     st.subheader("3. Local Data Backup & Export")
     st.write("Export your database, full JSON snapshots, and Anki-compatible flashcard decks.")
     
-    b_col1, b_col2, b_col3 = st.columns(3)
+    b_col1, b_col2, b_col3, b_col4 = st.columns(4)
     
     # 1. JSON Snapshot
     json_data = db.export_sqlite_to_json()
     b_col1.download_button(
-        "⬇️ Download JSON Snapshot",
+        "⬇️ JSON Snapshot",
         data=json_data.encode("utf-8"),
         file_name=f"question_lab_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
         mime="application/json",
@@ -5245,7 +5824,7 @@ def show_settings() -> None:
         with open(db.DB_PATH, "rb") as db_file:
             db_bytes = db_file.read()
         b_col2.download_button(
-            "💾 Download Raw SQLite DB (.db)",
+            "💾 SQLite DB (.db)",
             data=db_bytes,
             file_name=f"question_lab_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
             mime="application/x-sqlite3",
@@ -5258,12 +5837,25 @@ def show_settings() -> None:
     all_qs = db.list_questions()
     anki_csv = db.export_questions_to_anki_csv(all_qs)
     b_col3.download_button(
-        "🗂️ Export All to Anki (.csv)",
+        "🗂️ Anki (.csv)",
         data=anki_csv.encode("utf-8"),
         file_name=f"bpsc_anki_flashcards_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         use_container_width=True,
     )
+
+    # 4. Native Anki Deck (.apkg)
+    try:
+        all_apkg = anki_exporter.generate_anki_apkg_bytes(all_qs, deck_name="BPSC Complete Question Vault")
+        b_col4.download_button(
+            "📦 Native Anki (.apkg)",
+            data=all_apkg,
+            file_name=f"bpsc_complete_vault_{datetime.now().strftime('%Y%m%d_%H%M%S')}.apkg",
+            mime="application/octet-stream",
+            use_container_width=True,
+        )
+    except Exception as anki_err:
+        b_col4.warning(f"Anki note: {anki_err}")
 
 
 # -----------------------------------------------------------------------------
@@ -5341,6 +5933,8 @@ def main() -> None:
         show_current_affairs()
     elif selected_page == "Practice & Mock Tests":
         show_practice()
+    elif selected_page == "🖨️ Offline Exam & OMR Simulation":
+        show_offline_exam_simulation()
     elif selected_page == "AI Study Tutor":
         show_ai_tutor()
     elif selected_page == "AI Performance Coach":

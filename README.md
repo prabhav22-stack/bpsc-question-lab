@@ -81,6 +81,20 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - GitHub Actions keep-alive workflow (`.github/workflows/keep_alive.yml`) to keep cloud instances active.
    - Seamlessly connects to Supabase PostgreSQL & Supabase Auth when configured.
 
+9. **Dedicated Offline Exam & Optical OMR Simulation Lab:**
+   - **Authentic BPSC A4 OMR Sheet Generator (`omr_engine.py`)**: Generates print-ready high-precision PDF OMR sheets with optical corner registration markers, 7-digit candidate roll number bubble grids, test booklet series (A, B, C, D) bubbles, candidate signature blocks, and official -0.33 mark penalty instructions. Scalable for 25, 50, 100, and 150 questions.
+   - **Printable Question Booklet Compiler**: Generates official examination booklets complete with exam title, candidate instructions, and neatly typeset questions and options.
+   - **Custom Prompt-Driven Exam Generator**: Enter custom prompts specifying exact examination tone, focus topics (e.g. Bihar 1857 revolt, Kunwar Singh, Champaran, peasant movements, Indian Polity), question count (5 to 150), and formats (Standard MCQ, Multi-statement, Assertion-Reason, Chronology, Matching, Mental Ability).
+   - **Assembly from Authenticated Vaults**: Assemble offline test papers directly from Official BPSC PYQs, BPSC-Adjacent PYQs, Mock Exams, or Pinned Vault with optional shuffling.
+   - **Multimodal Gemini Vision OMR Evaluator**: Upload scanned or photographed OMR sheets (PDF or image). Gemini Vision identifies darkened bubbles and grades answers deterministically with official -0.33 negative marking. Includes an interactive inspection and manual verification grid.
+   - **AI Performance Diagnostic Analysis**: Gemini Flash provides detailed coaching reports analyzing executive score, cutoff prognosis, negative marking penalty bleed, subject strengths vs vulnerabilities, and 3 high-yield weekly revision directives.
+   - **1-Click Attempt Logging**: Save offline simulation attempts directly into SQLite `test_sessions`, `attempts`, and the Error Notebook to power the 7-day Revision Planner.
+
+10. **Native Anki Package (.apkg) & Open-Source Ecosystem Integration:**
+   - **Native Anki (.apkg) Exporter (`anki_exporter.py`)**: Integrates the open-source `genanki` library to compile responsive, styled flashcards directly importable into Anki desktop and mobile. Features dark-mode compatible CSS, front question layout, and back reveal with correct answer, explanations, distractor analysis, and hierarchical tags (`BPSC::Subject::Topic`).
+   - One-click `.apkg` export across Question Bank, Pinned Revision Vault, Offline Papers, and Settings.
+   - **Vector PDF Generation (`reportlab`)**: Produces crisp, publication-grade vector PDFs with standard typography and alignment grids.
+
 ---
 
 ## 🚀 Running on Windows
@@ -107,7 +121,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 63 tests (19 legacy regression tests + 24 v1.0 feature tests + 20 mock questions, background OCR, Gemini Native File API, adjacent PYQ segregation, deduplication, translation & PDF extractor tests):
+Run all 79 tests (19 legacy regression tests + 24 v1.0 feature tests + 28 mock questions, background OCR, Gemini Native File API, adjacent PYQ segregation, deduplication, translation & PDF extractor tests + 8 offline OMR simulation, ReportLab PDF, and Anki .apkg tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
