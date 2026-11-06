@@ -1,4 +1,4 @@
-"""Configuration and secret management for BPSC Question Lab.
+"""Configuration and secret management for Question Lab.
 
 Loads settings from Streamlit secrets (for cloud deployment or local .streamlit/secrets.toml)
 or environment variables (.env file for local development).

@@ -1,4 +1,4 @@
-"""Anki flashcard package (.apkg) generator for BPSC Question Lab.
+"""Anki flashcard package (.apkg) generator for Question Lab.
 
 Leverages the open-source genanki library to produce styled, interactive
 spaced-repetition flashcards directly importable into Anki desktop and mobile.
@@ -17,7 +17,7 @@ try:
 except ImportError:
     _HAS_GENANKI = False
 
-# Stable unique Model ID and CSS for BPSC Question Lab Flashcards
+# Stable unique Model ID and CSS for Question Lab Flashcards
 BPSC_ANKI_MODEL_ID = 1607392325
 
 BPSC_CARD_CSS = """
@@ -160,7 +160,7 @@ def _get_bpsc_model() -> Any:
         raise ImportError("genanki is not installed. Run 'pip install genanki'.")
     return genanki.Model(
         BPSC_ANKI_MODEL_ID,
-        "BPSC Question Lab Card",
+        "Question Lab Card",
         fields=[
             {"name": "Question"},
             {"name": "Option_A"},
@@ -189,7 +189,7 @@ def _get_bpsc_model() -> Any:
 
 def generate_anki_apkg_bytes(
     questions: Union[List[Dict[str, Any]], pd.DataFrame],
-    deck_name: str = "BPSC Question Lab Flashcards",
+    deck_name: str = "Question Lab Flashcards",
     deck_id: int = 2059481923,
 ) -> bytes:
     """Generate an Anki .apkg package as in-memory bytes.

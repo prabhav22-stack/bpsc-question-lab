@@ -1,4 +1,4 @@
-"""Deterministic analytics engine for BPSC Question Lab v1.0.
+"""Deterministic analytics engine for Question Lab v2.0.
 
 All numbers, accuracy percentages, priority weights, sample size ratings,
 and revision retention metrics are computed strictly in Python and SQL.

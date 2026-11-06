@@ -1,4 +1,4 @@
-"""Database repository and persistence engine for BPSC Question Lab v1.0.
+"""Database repository and persistence engine for Question Lab v2.0.
 
 Features:
 - Local SQLite database (question_lab.db) with non-destructive, additive migrations.

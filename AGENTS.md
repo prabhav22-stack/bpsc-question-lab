@@ -1,4 +1,4 @@
-# BPSC Question Lab: project instructions for Antigravity
+# Question Lab: project instructions for Antigravity
 
 ## Project goal
 Build a local-first study tool for BPSC and UPSC preparation. The current release is Version 0.1. Keep changes small, testable, and compatible with later versions.

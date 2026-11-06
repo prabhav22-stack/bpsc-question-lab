@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ======================================
-echo BPSC Question Lab - first-time setup
+echo Question Lab - first-time setup
 echo ======================================
 
 where py >nul 2>nul
@@ -32,6 +32,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Starting BPSC Question Lab in your browser...
+echo Starting Question Lab in your browser...
 ".venv\Scripts\python.exe" -m streamlit run app.py
 pause

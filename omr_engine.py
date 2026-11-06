@@ -200,7 +200,7 @@ def generate_bpsc_omr_pdf(
     c.drawCentredString(
         page_w / 2,
         margin + 8,
-        "BPSC Question Lab · Computer Vision & OMR Evaluation System · Do Not Fold or Mutilate This Sheet"
+        "Question Lab · Computer Vision & OMR Evaluation System · Do Not Fold or Mutilate This Sheet"
     )
 
     c.showPage()

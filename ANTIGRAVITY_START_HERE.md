@@ -1,4 +1,4 @@
-# Open BPSC Question Lab in Google Antigravity
+# Open Question Lab in Google Antigravity
 
 ## 1. Open this project
 1. Extract the ZIP to a normal folder, for example `Documents\bpsc_question_lab_v0_1`.
@@ -11,7 +11,7 @@ You do not need GitHub just to open and work on this local folder.
 
 ## 2. First prompt to paste into Antigravity
 
-Please inspect this BPSC Question Lab Version 0.1 codebase before changing anything. Read AGENTS.md and README.md, then inspect app.py, requirements.txt, and sample_questions.csv. Explain the current architecture and check for obvious correctness or runtime problems. Run safe, relevant checks where possible. Do not rewrite the app, add online search or AI features yet, delete/reset any database, or make broad changes. First return a short findings report and a proposed small plan for making Version 0.1 reliable. Clearly distinguish checks you actually ran from checks you could not run. Wait for my approval before implementing changes.
+Please inspect this Question Lab codebase before changing anything. Read AGENTS.md and README.md, then inspect app.py, requirements.txt, and sample_questions.csv. Explain the current architecture and check for obvious correctness or runtime problems. Run safe, relevant checks where possible. Do not rewrite the app, add online search or AI features yet, delete/reset any database, or make broad changes. First return a short findings report and a proposed small plan for making Question Lab reliable. Clearly distinguish checks you actually ran from checks you could not run. Wait for my approval before implementing changes.
 
 ## 3. Run the app from Antigravity's terminal
 

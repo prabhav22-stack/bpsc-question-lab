@@ -1,9 +1,9 @@
 @echo off
-title BPSC Question Lab - Internet Share
+title Question Lab - Internet Share
 cd /d "%~dp0"
 
 echo ========================================================
-echo   Starting BPSC Question Lab with Free Internet Access
+echo   Starting Question Lab with Free Internet Access
 echo ========================================================
 echo.
 

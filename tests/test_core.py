@@ -1,4 +1,4 @@
-"""Unit tests for BPSC Question Lab v0.1.
+"""Unit tests for Question Lab.
 
 Tests core scoring, priority calculation, CSV validation, and DB helpers
 using an in-memory SQLite database so no on-disk question_lab.db is touched.

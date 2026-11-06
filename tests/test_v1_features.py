@@ -1,4 +1,4 @@
-"""Comprehensive unit and integration test suite for BPSC Question Lab v1.0.
+"""Comprehensive unit and integration test suite for Question Lab.
 
 Covers:
 - Schema validation for AI question sets, mistake diagnoses, and reports.

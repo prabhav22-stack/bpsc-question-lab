@@ -1,4 +1,4 @@
-"""Prompt templates and system instructions for BPSC Question Lab v1.0.
+"""Prompt templates and system instructions for Question Lab v2.0.
 
 Adheres strictly to the guidelines:
 - Never falsely present generated questions as official PYQs.

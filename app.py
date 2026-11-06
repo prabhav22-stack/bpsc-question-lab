@@ -1,4 +1,4 @@
-"""BPSC Question Lab v2.0 - AI-Powered Exam Preparation Platform.
+"""Question Lab v2.0 - AI-Powered Exam Preparation Platform.
 
 An adaptive, evidence-based study and revision environment for BPSC CCE & UPSC Prelims.
 Integrates official Google Gemini SDK, deterministic analytics, metacognitive calibration,
@@ -930,7 +930,7 @@ def show_dashboard() -> None:
                     Target: Sept 2025 · 150 MCQs · 120 Mins · -0.33 Marking
                 </span>
             </div>
-            <h2 class="bpsc-hero-title">BPSC Question Lab v2.0</h2>
+            <h2 class="bpsc-hero-title">Question Lab v2.0</h2>
             <p class="bpsc-hero-desc">
                 Adaptive, evidence-based preparation platform with authentic 10-year PYQ benchmarks, interactive CBT OMR examination simulation, and metacognitive confidence calibration.
             </p>
@@ -5864,7 +5864,7 @@ def show_settings() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="BPSC Question Lab v2.0",
+        page_title="Question Lab v2.0",
         page_icon="📚",
         layout="wide",
         initial_sidebar_state="expanded",
@@ -5877,7 +5877,7 @@ def main() -> None:
         f"""
         <div class="sidebar-brand-card">
             <div class="brand-sub">Government Examination Lab</div>
-            <div class="brand-name">🏛️ BPSC QUESTION LAB</div>
+            <div class="brand-name">🏛️ QUESTION LAB</div>
             <div class="brand-ver">
                 <span>v{APP_VERSION}</span> · 
                 <span style="color: #10b981; font-weight: 700;">● Online</span> · 

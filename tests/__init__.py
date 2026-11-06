@@ -1,1 +1,1 @@
-# Tests package for BPSC Question Lab
+# Tests package for Question Lab

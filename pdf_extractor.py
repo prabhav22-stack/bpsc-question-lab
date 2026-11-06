@@ -1,4 +1,4 @@
-"""PDF extraction and OCR processing engine for BPSC Question Lab v2.0.
+"""PDF extraction and OCR processing engine for Question Lab v2.0.
 
 Provides automated extraction of multiple-choice questions from both:
 1. Digital / OCR Text PDFs (direct text extraction + Gemini structured categorization)

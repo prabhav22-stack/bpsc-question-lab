@@ -1,4 +1,4 @@
-"""Multi-Engine Local OCR Subsystem for BPSC Question Lab v2.0.
+"""Multi-Engine Local OCR Subsystem for Question Lab v2.0.
 
 Supports:
 1. RapidOCR (High-speed ONNX Runtime port of PaddleOCR - pure CPU)

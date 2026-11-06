@@ -1,5 +1,5 @@
 -- =========================================================================
--- BPSC Question Lab v1.0 - Production Supabase PostgreSQL Schema with RLS
+-- Question Lab v2.0 - Production Supabase PostgreSQL Schema with RLS
 -- Run this in your Supabase SQL Editor to initialize cloud storage.
 -- =========================================================================
 

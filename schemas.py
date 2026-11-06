@@ -1,4 +1,4 @@
-"""Pydantic schemas and data validation models for BPSC Question Lab v1.0.
+"""Pydantic schemas and data validation models for Question Lab v2.0.
 
 Provides strict validation for AI generated questions, mistake diagnoses,
 performance reports, and research summaries.

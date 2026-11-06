@@ -1,4 +1,4 @@
-"""Supabase client, authentication, and migration utility for BPSC Question Lab v1.0.
+"""Supabase client, authentication, and migration utility for Question Lab v2.0.
 
 Provides:
 - Secure connection using Supabase URL and public Anon key.

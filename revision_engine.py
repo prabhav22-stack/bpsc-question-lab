@@ -1,4 +1,4 @@
-"""Adaptive spaced-repetition and revision planner engine for BPSC Question Lab v1.0.
+"""Adaptive spaced-repetition and revision planner engine for Question Lab v2.0.
 
 Provides:
 - Deterministic spaced-repetition interval scheduling based on empirical performance.

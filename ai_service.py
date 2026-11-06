@@ -1,4 +1,4 @@
-"""AI Service layer for BPSC Question Lab v1.0.
+"""AI Service layer for Question Lab v2.0.
 
 Provides official google-genai SDK integration with Gemini for:
 - Structured question generation (AI Question Studio)

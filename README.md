@@ -1,4 +1,4 @@
-# BPSC Question Lab · Version 2.0.0
+# Question Lab · Version 2.0.0
 
 An AI-powered, personal examination laboratory for **BPSC Combined Competitive Exam (CCE)** and **UPSC Civil Services Prelims**.
 
