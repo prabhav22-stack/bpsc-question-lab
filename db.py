@@ -1954,6 +1954,13 @@ def init_db() -> None:
             except Exception:
                 pass
 
+        if "fsrs_state" not in q_cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN fsrs_state TEXT NOT NULL DEFAULT ''")
+        if "fsrs_stability" not in q_cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN fsrs_stability REAL NOT NULL DEFAULT 0.0")
+        if "fsrs_due" not in q_cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN fsrs_due TEXT NOT NULL DEFAULT ''")
+
         # High-Speed B-Tree Indexes for Instant Lookups on 7,500+ MCQs
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_normalized_stem ON questions(normalized_stem);")
@@ -3137,6 +3144,24 @@ def record_attempt(
         ))
         conn.commit()
 
+        # Update FSRS memory retention state
+        try:
+            import fsrs_engine
+            row = conn.execute("SELECT fsrs_state FROM questions WHERE id = ?", (question_id,)).fetchone()
+            curr_state = row[0] if row else ""
+            card_json, stab, due_dt = fsrs_engine.record_fsrs_review(
+                card_json=curr_state,
+                is_correct=bool(is_correct),
+                confidence=confidence_rating,
+            )
+            conn.execute(
+                "UPDATE questions SET fsrs_state = ?, fsrs_stability = ?, fsrs_due = ? WHERE id = ?",
+                (card_json, stab, due_dt.isoformat(), question_id),
+            )
+            conn.commit()
+        except Exception:
+            pass
+
 
 def record_test_session(
     session_id: str,
@@ -3278,6 +3303,37 @@ def is_question_pinned(question_id: int) -> bool:
             "SELECT 1 FROM pinned_notebook WHERE question_id = ? LIMIT 1", (question_id,)
         ).fetchone()
         return bool(row)
+
+
+def get_fsrs_revision_queue(limit: int = 25) -> pd.DataFrame:
+    """Fetch questions scheduled for review by FSRS memory decay."""
+    with connect_db() as conn:
+        df = pd.read_sql_query("""
+            SELECT q.*,
+                   COALESCE((SELECT MAX(attempted_at) FROM attempts WHERE question_id = q.id), '') AS last_attempted_at,
+                   COALESCE((SELECT is_correct FROM attempts WHERE question_id = q.id ORDER BY attempted_at DESC LIMIT 1), -1) AS last_is_correct,
+                   COALESCE((SELECT COUNT(*) FROM attempts WHERE question_id = q.id), 0) AS total_attempts
+            FROM questions q
+            WHERE q.id IN (SELECT DISTINCT question_id FROM attempts)
+            ORDER BY 
+                CASE 
+                    WHEN q.fsrs_due != '' AND q.fsrs_due <= datetime('now') THEN 0
+                    WHEN q.fsrs_due != '' THEN 1
+                    ELSE 2 
+                END,
+                q.fsrs_stability ASC,
+                last_attempted_at ASC
+            LIMIT ?
+        """, conn, params=(limit,))
+        if not df.empty:
+            import fsrs_engine
+            df["retrievability"] = [
+                fsrs_engine.compute_retrievability(float(row["fsrs_stability"] or 0.0), row.get("last_attempted_at") or "")
+                for _, row in df.iterrows()
+            ]
+        else:
+            df["retrievability"] = []
+        return df
 
 
 def get_pinned_question_ids() -> Set[int]:

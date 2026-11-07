@@ -37,12 +37,56 @@ import ocr_engine
 from schemas import ExtractedMockQuestion, ExtractedMockQuestionSet
 
 try:
+    import pymupdf
+    _HAS_PYMUPDF = True
+except ImportError:
+    _HAS_PYMUPDF = False
+
+try:
     from google import genai
     from google.genai import types
 
     _HAS_GENAI = True
 except ImportError:
     _HAS_GENAI = False
+
+
+def extract_dual_column_text_from_bytes(pdf_bytes: bytes, page_idx: int) -> str:
+    """Extract text from a 2-column page layout sequentially: left column top-to-bottom, then right column."""
+    if not _HAS_PYMUPDF:
+        return ""
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        if page_idx >= len(doc):
+            return ""
+        page = doc[page_idx]
+        w, h = page.rect.width, page.rect.height
+        mid_x = w / 2.0
+        left_rect = pymupdf.Rect(0, 0, mid_x, h)
+        right_rect = pymupdf.Rect(mid_x, 0, w, h)
+        left_text = page.get_text("text", clip=left_rect).strip()
+        right_text = page.get_text("text", clip=right_rect).strip()
+        doc.close()
+        return f"{left_text}\n\n{right_text}"
+    except Exception:
+        return ""
+
+
+def render_page_image_high_res_pymupdf(pdf_bytes: bytes, page_idx: int, dpi: int = 180) -> bytes:
+    """Render a page to high-res PNG bytes using PyMuPDF (fast C++ rendering)."""
+    if not _HAS_PYMUPDF:
+        return b""
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        if page_idx >= len(doc):
+            return b""
+        page = doc[page_idx]
+        pix = page.get_pixmap(dpi=dpi)
+        img_bytes = pix.tobytes("png")
+        doc.close()
+        return img_bytes
+    except Exception:
+        return b""
 
 
 SYSTEM_PDF_MOCK_EXTRACTOR = """You are an expert examination archivist, bilingual translator, and syllabus classifier for BPSC CCE & UPSC Prelims.

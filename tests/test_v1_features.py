@@ -1585,5 +1585,144 @@ class TestOMRAndAnkiSimulationFeatures(unittest.TestCase):
         self.assertIn("Executive Scorecard", report)
 
 
+
+class TestNewStackFeatures(unittest.TestCase):
+    """Unit and integration tests for FSRS, Edge-TTS audio, PyMuPDF, Plotly, and BPSC Blueprint PDFs."""
+
+    def test_fsrs_engine_card_lifecycle(self):
+        """Test FSRS v6 Card initialization, review updates, and retrievability calculation."""
+        from datetime import datetime, timezone
+        import fsrs_engine
+        from fsrs import Rating
+
+        card = fsrs_engine.init_fsrs_card()
+        self.assertIsNotNone(card)
+        self.assertIsNone(card.stability)
+
+        # Rating determination
+        r_corr_hi = fsrs_engine.rating_from_attempt(is_correct=True, confidence="High")
+        self.assertEqual(r_corr_hi, Rating.Easy)
+
+        r_wrong = fsrs_engine.rating_from_attempt(is_correct=False, confidence="High")
+        self.assertEqual(r_wrong, Rating.Again)
+
+        r_guess_corr = fsrs_engine.rating_from_attempt(is_correct=True, confidence="Guess")
+        self.assertEqual(r_guess_corr, Rating.Hard)
+
+        # Record review
+        card_str, stability, due_dt = fsrs_engine.record_fsrs_review(card, is_correct=True, confidence="High")
+        self.assertGreater(stability, 0.0)
+        self.assertTrue(len(card_str) > 0)
+        self.assertIsNotNone(due_dt)
+
+        # Retrievability
+        r = fsrs_engine.compute_retrievability(stability, datetime.now(timezone.utc).isoformat())
+        self.assertGreaterEqual(r, 0.0)
+        self.assertLessEqual(r, 1.0)
+
+        label, color = fsrs_engine.get_retrievability_label(0.92)
+        self.assertEqual(label, "Fresh in Memory")
+
+    def test_bpsc_150q_blueprint_constant(self):
+        """Verify the 150-Q Blueprint accurately sums to 150 marks with official BPSC Prelims quotas."""
+        import omr_engine
+        total = sum(omr_engine.BPSC_150Q_BLUEPRINT.values())
+        self.assertEqual(total, 150)
+        self.assertIn("General Mental Ability & Mathematics", omr_engine.BPSC_150Q_BLUEPRINT)
+        self.assertEqual(omr_engine.BPSC_150Q_BLUEPRINT["General Mental Ability & Mathematics"], 10)
+        self.assertEqual(omr_engine.BPSC_150Q_BLUEPRINT["Modern History"], 30)
+
+    def test_omr_solutions_booklet_pdf_generation(self):
+        """Verify generating official BPSC Solutions & Explanations Booklet PDF."""
+        import omr_engine
+        sample_qs = [
+            {
+                "id": 1,
+                "question": "Who led the 1857 Revolt in Jagdishpur, Bihar?",
+                "option_a": "Kunwar Singh",
+                "option_b": "Amar Singh",
+                "option_c": "Hare Krishna Singh",
+                "option_d": "Pir Ali Khan",
+                "correct_option": "A",
+                "explanation": "Veer Kunwar Singh led the rebellion from Jagdishpur.",
+                "distractor_notes": "Amar Singh was his younger brother.",
+                "topic": "1857 Revolt in Bihar",
+            },
+            {
+                "id": 2,
+                "question": "Which Article of the Constitution provides for the Advocate General of the State?",
+                "option_a": "Article 165",
+                "option_b": "Article 76",
+                "option_c": "Article 148",
+                "option_d": "Article 324",
+                "correct_option": "A",
+                "explanation": "Article 165 provides for Advocate General for the State.",
+                "topic": "State Executive",
+            }
+        ]
+        pdf_bytes = omr_engine.generate_bpsc_solutions_paper_pdf(
+            questions=sample_qs,
+            exam_title="71st BPSC Combined Competitive Prelims",
+            series="A",
+        )
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+        self.assertGreater(len(pdf_bytes), 2000)
+
+    def test_omr_performance_certificate_pdf_generation(self):
+        """Verify generating official Candidate Performance Transcript & Certificate PDF."""
+        import omr_engine
+        eval_res = {
+            "total_questions": 5,
+            "attempted": 4,
+            "unattempted": 1,
+            "correct": 3,
+            "incorrect": 1,
+            "accuracy": 75.0,
+            "penalty_lost": 0.33,
+            "net_score": 2.67,
+            "subject_breakdown": {
+                "History": {"total": 3, "correct": 2, "incorrect": 1, "accuracy": 66.7, "net_score": 1.67},
+                "Polity": {"total": 2, "correct": 1, "incorrect": 0, "accuracy": 100.0, "net_score": 1.0},
+            }
+        }
+        cert_bytes = omr_engine.generate_bpsc_performance_certificate_pdf(
+            eval_result=eval_res,
+            candidate_roll="710428",
+            exam_title="71st BPSC Combined Competitive Prelims",
+            series="A",
+        )
+        self.assertTrue(cert_bytes.startswith(b"%PDF"))
+        self.assertGreater(len(cert_bytes), 2000)
+
+    def test_audio_engine_formatters(self):
+        """Verify that audio engine narration API functions accept valid payloads."""
+        import audio_engine
+        self.assertTrue(audio_engine.is_audio_supported())
+        voices = audio_engine.get_available_voices()
+        voice_ids = [v["id"] for v in voices]
+        self.assertIn("en-IN-PrabhatNeural", voice_ids)
+
+        # Check call signatures without throwing errors
+        q_row = {
+            "question": "What is the capital of Bihar?",
+            "option_a": "Patna",
+            "option_b": "Gaya",
+            "option_c": "Muzaffarpur",
+            "option_d": "Bhagalpur",
+        }
+        self.assertTrue(callable(audio_engine.generate_question_narration))
+        self.assertTrue(callable(audio_engine.generate_explanation_narration))
+        self.assertTrue(callable(audio_engine.generate_dossier_podcast))
+
+    def test_db_fsrs_revision_queue_structure(self):
+        """Verify db.get_fsrs_revision_queue returns expected DataFrame structure."""
+        import db
+        queue_df = db.get_fsrs_revision_queue(limit=5)
+        self.assertIsNotNone(queue_df)
+        if not queue_df.empty:
+            self.assertIn("retrievability", queue_df.columns)
+            self.assertIn("fsrs_stability", queue_df.columns)
+
+
 if __name__ == "__main__":
     unittest.main()

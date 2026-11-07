@@ -95,6 +95,31 @@ Combines official Google Gemini generative AI, deterministic examination analyti
    - One-click `.apkg` export across Question Bank, Pinned Revision Vault, Offline Papers, and Settings.
    - **Vector PDF Generation (`reportlab`)**: Produces crisp, publication-grade vector PDFs with standard typography and alignment grids.
 
+11. **Free Spaced Repetition Scheduler (`fsrs` v6) Engine (`fsrs_engine.py`):**
+   - State-of-the-art DSR (Difficulty, Stability, Retrievability) memory decay algorithm replacing static revision intervals with mathematically optimal review scheduling.
+   - Automatically updates card stability and calculates real-time retrievability on every question attempt.
+   - **FSRS Scientific Revision Queue**: Dedicated tab in Revision Planner sorting questions right before memory retention slips below 90%, with 1-click rapid memory drills.
+   - **FSRS Memory Retention Gauge**: Real-time memory health widget on Dashboard displaying overall long-term retention status.
+
+12. **Neural Speech Synthesis (`edge-tts`) & Audio Learning Lab (`audio_engine.py`):**
+   - High-fidelity Indian English and Hindi neural voices (`en-IN-PrabhatNeural`, `en-IN-NeerjaNeural`, `hi-IN-MadhurNeural`, `hi-IN-SwaraNeural`) requiring no paid API keys.
+   - **Question & Choice Narration**: Listen to questions, statements, and 4 choices read aloud in Practice Mode.
+   - **Audio Mistake Explanations**: One-click audio breakdown of correct answers, conceptual foundations, and distractor traps during post-test review.
+   - **Current Affairs Audio Dossier Podcasts**: Synthesizes saved research dossiers and policy analyses into structured 2-minute daily audio podcasts.
+
+13. **High-Speed Document Parsing & Dual-Column De-Columnizer (`pymupdf` / `pdf_extractor.py`):**
+   - 10–20x faster native C-level PDF rendering and text extraction using PyMuPDF (fitz).
+   - **Dual-Column De-Columnizer**: Intelligently bisects two-column BPSC compendiums (Ghatna Chakra, Eduteria) into left-then-right reading streams, preventing horizontal line bleed and character interleaving during OCR.
+
+14. **Interactive Plotly Visual Analytics (`plotly`):**
+   - **11-Subject Radar / Spider Readiness Web**: Dynamic interactive chart benchmarking subject accuracy against the historical BPSC Prelims 65% cutoff target.
+   - Visualizes strengths and vulnerable subjects across all 11 official syllabus divisions.
+
+15. **Authentic 150-Question BPSC Prelims Blueprint Mock & Solutions Booklet PDF (`omr_engine.py`):**
+   - **1-Click 150-Question Mock Assembly**: Assembles complete 150-question Prelims test following official BPSC quotas: History (30), Science (30), Current Affairs (30), Bihar Special (20), Geography (10), Polity (10), Economy (10), General Mental Ability & Maths (10).
+   - **Official Solutions & Explanations Booklet (PDF)**: Generates publication-grade solutions booklet with stems, green-highlighted correct answers, detailed explanations, distractor traps, and concepts tested.
+   - **Candidate Performance Transcript & Certificate (PDF)**: High-precision vector PDF transcript featuring candidate roll number, series, score breakdown, -0.33 negative marking penalty bleed, subject table, and qualification prognosis.
+
 ---
 
 ## 🚀 Running on Windows
@@ -121,7 +146,7 @@ The app will open automatically at `http://localhost:8501`.
 
 ## 🧪 Running the Automated Test Suite
 
-Run all 79 tests (19 legacy regression tests + 24 v1.0 feature tests + 28 mock questions, background OCR, Gemini Native File API, adjacent PYQ segregation, deduplication, translation & PDF extractor tests + 8 offline OMR simulation, ReportLab PDF, and Anki .apkg tests):
+Run all 89 tests (19 legacy regression tests + 24 v1.0 feature tests + 28 mock questions & OCR tests + 8 offline OMR & Anki tests + 10 FSRS, Edge-TTS, PyMuPDF, Plotly & Blueprint PDF tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

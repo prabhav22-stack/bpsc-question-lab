@@ -25,14 +25,18 @@ import importlib
 import ai_service
 import analytics
 import anki_exporter
+import audio_engine
 import config
 import db
+import fsrs_engine
 import ocr_engine
 import omr_engine
 import pdf_extractor
 import revision_engine
 import schemas
 import supabase_client
+import plotly.graph_objects as go
+import plotly.express as px
 
 # Force-reload local modules to guarantee Streamlit hot-reloading captures newly pulled modules
 try:
@@ -43,6 +47,8 @@ try:
     importlib.reload(ocr_engine)
     importlib.reload(omr_engine)
     importlib.reload(anki_exporter)
+    importlib.reload(audio_engine)
+    importlib.reload(fsrs_engine)
     importlib.reload(pdf_extractor)
     importlib.reload(revision_engine)
     importlib.reload(schemas)
@@ -1027,12 +1033,14 @@ def show_dashboard() -> None:
                 )
 
             # Comprehensive 11-Subject Syllabus Coverage & Readiness Matrix
-            with st.expander("📈 11-Subject Syllabus Coverage & Readiness Matrix", expanded=False):
+            with st.expander("📈 11-Subject Syllabus Coverage & Readiness Matrix", expanded=True):
                 try:
                     all_bank_qs = db.list_questions()
                     bank_counts = all_bank_qs["subject"].value_counts().to_dict() if not all_bank_qs.empty else {}
 
                     matrix_rows = []
+                    radar_subjects = [s for s in db.SUBJECTS if s != "Other"]
+                    radar_scores = []
                     for s in db.SUBJECTS:
                         q_avail = bank_counts.get(s, 0)
                         s_att = attempts[attempts["subject"] == s] if not attempts.empty and "subject" in attempts.columns else pd.DataFrame()
@@ -1050,6 +1058,9 @@ def show_dashboard() -> None:
                             acc = 0.0
                             status = "⚪ Untested"
 
+                        if s in radar_subjects:
+                            radar_scores.append(acc)
+
                         matrix_rows.append({
                             "Syllabus Subject": s,
                             "Available MCQs": q_avail,
@@ -1057,6 +1068,64 @@ def show_dashboard() -> None:
                             "Accuracy (%)": f"{acc}%" if att_cnt > 0 else "-",
                             "Readiness Status": status,
                         })
+
+                    # Plotly Radar Web Chart
+                    if len(radar_subjects) > 0 and any(sc > 0 for sc in radar_scores):
+                        fig_radar = go.Figure()
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=radar_scores + [radar_scores[0]],
+                            theta=radar_subjects + [radar_subjects[0]],
+                            fill='toself',
+                            fillcolor='rgba(59, 130, 246, 0.25)',
+                            line=dict(color='#3b82f6', width=2),
+                            name='Your Accuracy %',
+                        ))
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=[65] * (len(radar_subjects) + 1),
+                            theta=radar_subjects + [radar_subjects[0]],
+                            line=dict(color='#10b981', width=1.5, dash='dash'),
+                            name='BPSC Cutoff Benchmark (65%)',
+                        ))
+                        fig_radar.update_layout(
+                            polar=dict(
+                                radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=9, color="#94a3b8")),
+                                angularaxis=dict(tickfont=dict(size=10, color="#f8fafc")),
+                            ),
+                            showlegend=True,
+                            legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="center", x=0.5),
+                            margin=dict(l=30, r=30, t=10, b=30),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            height=330,
+                        )
+                        st.plotly_chart(fig_radar, use_container_width=True)
+
+                    # FSRS Memory Retention Overview
+                    try:
+                        with db.connect_db() as conn:
+                            fsrs_rows = conn.execute("SELECT fsrs_stability, (SELECT MAX(attempted_at) FROM attempts WHERE question_id = questions.id) as last_att FROM questions WHERE fsrs_stability > 0").fetchall()
+                        if fsrs_rows:
+                            retrievabilities = [fsrs_engine.compute_retrievability(r[0], r[1]) for r in fsrs_rows]
+                            avg_retention = sum(retrievabilities) / len(retrievabilities) * 100.0
+                            r_label, r_color = fsrs_engine.get_retrievability_label(avg_retention / 100.0)
+                            st.markdown(
+                                f"""
+                                <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid {r_color}44; border-radius: 8px; padding: 10px 14px; margin: 10px 0;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                                        <div>
+                                            <span style="font-size: 13px; color: #94a3b8; font-weight: 600;">🧠 FSRS Scientific Memory Retention:</span>
+                                            <span style="font-size: 15px; font-weight: 800; color: {r_color}; margin-left: 6px;">{avg_retention:.1f}% Retrievability</span>
+                                        </div>
+                                        <span style="font-size: 11px; background: {r_color}22; color: {r_color}; padding: 2px 9px; border-radius: 999px; font-weight: 700; border: 1px solid {r_color}44;">
+                                            {r_label}
+                                        </span>
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    except Exception:
+                        pass
 
                     st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
                 except Exception:
@@ -3614,6 +3683,14 @@ def show_practice() -> None:
                 if res.get("distractor_notes"):
                     st.warning(f"⚠️ **Distractor Trap Analysis:**\n\n{res['distractor_notes']}")
 
+                if st.button("🎧 Listen to Audio Explanation", key=f"btn_exp_aud_{idx}_{res['question_id']}"):
+                    with st.spinner("Synthesizing audio explanation..."):
+                        exp_aud = audio_engine.generate_explanation_narration(res)
+                        if exp_aud:
+                            st.audio(exp_aud, format="audio/mp3")
+                        else:
+                            st.warning("Audio explanation temporarily unavailable.")
+
                 act1, act2 = st.columns(2)
                 qid = int(res["question_id"])
                 is_pinned = db.is_question_pinned(qid)
@@ -3810,6 +3887,19 @@ def show_practice() -> None:
                         unsafe_allow_html=True,
                     )
                     st.markdown(f"#### {row['question']}")
+
+                    # Neural Audio Question Reader
+                    with st.expander("🎧 Listen to Question (Neural Audio)", expanded=False):
+                        aud_c1, aud_c2, aud_c3 = st.columns([1.5, 1, 1])
+                        v_voice = aud_c1.selectbox("Voice", list(audio_engine.VOICES.keys()), index=0, key=f"v_v_{active_test['session_id']}_{qid}")
+                        v_rate = aud_c2.select_slider("Speed", options=["-15%", "+0%", "+15%"], value="+0%", key=f"v_r_{active_test['session_id']}_{qid}")
+                        if aud_c3.button("▶️ Read Aloud", key=f"btn_audio_{active_test['session_id']}_{qid}", use_container_width=True):
+                            with st.spinner("Synthesizing neural speech..."):
+                                audio_bytes = audio_engine.generate_question_narration(row.to_dict(), voice=v_voice, rate=v_rate)
+                                if audio_bytes:
+                                    st.audio(audio_bytes, format="audio/mp3")
+                                else:
+                                    st.warning("Audio synthesis temporarily unavailable.")
 
                     opts = {
                         "A": str(row["option_a"]),
@@ -4156,7 +4246,7 @@ def show_offline_exam_simulation() -> None:
         
         source_mode = st.radio(
             "Select Question Origin:",
-            ["🤖 AI Custom Prompt Generator", "📚 From Question Bank & Previous Vaults"],
+            ["🤖 AI Custom Prompt Generator", "📚 From Question Bank & Previous Vaults", "🏛️ 150-Q Official BPSC Blueprint Mock"],
             horizontal=True,
             key="offline_source_mode_radio",
         )
@@ -4278,6 +4368,54 @@ def show_offline_exam_simulation() -> None:
                     except Exception as exc:
                         st.error(f"Generation error: {exc}")
 
+        elif source_mode == "🏛️ 150-Q Official BPSC Blueprint Mock":
+            st.markdown(
+                """
+                <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                    <div style="font-weight: 700; color: #c084fc; margin-bottom: 4px;">🏛️ Authentic 150-Question BPSC Prelims Paper Blueprint</div>
+                    <div style="font-size: 13px; color: #cbd5e1;">
+                        Assembles a complete 150-question mock adhering strictly to official BPSC syllabus quotas:
+                        History (35), General Science (30), Bihar Special (25), Current Affairs (25), Indian Polity (12), Indian Economy (13), General Mental Ability & Maths (10).
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            bp_c1, bp_c2 = st.columns([2, 1])
+            with bp_c1:
+                st.caption("Quotas: History (35) · Science (30) · Bihar Special (25) · Current Affairs (25) · Polity (12) · Economy (13) · Mental Ability & Maths (10)")
+            with bp_c2:
+                bp_include_pyq_only = st.checkbox("Prioritize Official PYQs", value=True)
+
+            if st.button("🏛️ Assemble 150-Question Blueprint Mock", type="primary", use_container_width=True):
+                with st.spinner("Assembling 150 questions matching official BPSC syllabus quotas..."):
+                    all_qs = []
+                    for subj, target_cnt in omr_engine.BPSC_150Q_BLUEPRINT.items():
+                        df_s = db.list_questions(subject=subj)
+                        if df_s.empty:
+                            df_s = db.list_questions()
+                        if bp_include_pyq_only:
+                            pyq_sub = df_s[df_s["source_type"] == "Official PYQ"]
+                            if not pyq_sub.empty and len(pyq_sub) >= target_cnt:
+                                df_s = pyq_sub
+                        sample_cnt = min(len(df_s), target_cnt)
+                        if sample_cnt > 0:
+                            sampled = df_s.sample(n=sample_cnt, random_state=random.randint(1, 9999))
+                            all_qs.extend(sampled.to_dict(orient="records"))
+
+                    if len(all_qs) < 150:
+                        existing_ids = {q.get("id") for q in all_qs}
+                        remaining_df = db.list_questions()
+                        remaining_df = remaining_df[~remaining_df["id"].isin(existing_ids)]
+                        need = 150 - len(all_qs)
+                        if not remaining_df.empty:
+                            topup = remaining_df.sample(n=min(need, len(remaining_df)), random_state=random.randint(1, 9999))
+                            all_qs.extend(topup.to_dict(orient="records"))
+
+                    random.shuffle(all_qs)
+                    st.session_state["offline_paper_questions"] = all_qs
+                    st.success(f"Assembled complete {len(all_qs)}-Question BPSC Prelims Paper!")
+
         else:
             # Question Bank & Vaults mode
             st.markdown(
@@ -4365,7 +4503,7 @@ def show_offline_exam_simulation() -> None:
             )
 
             # PDF and Deck generation
-            d_col1, d_col2, d_col3 = st.columns(3)
+            d_col1, d_col2, d_col3, d_col4 = st.columns(4)
             with d_col1:
                 try:
                     omr_bytes = omr_engine.generate_bpsc_omr_pdf(
@@ -4375,7 +4513,7 @@ def show_offline_exam_simulation() -> None:
                         candidate_roll=p_roll,
                     )
                     st.download_button(
-                        "🖨️ Download BPSC OMR Sheet (PDF)",
+                        "🖨️ OMR Sheet (PDF)",
                         data=omr_bytes,
                         file_name=f"bpsc_omr_sheet_series_{p_series}.pdf",
                         mime="application/pdf",
@@ -4395,7 +4533,7 @@ def show_offline_exam_simulation() -> None:
                         max_marks=total_marks,
                     )
                     st.download_button(
-                        "📄 Download Question Booklet (PDF)",
+                        "📄 Question Paper (PDF)",
                         data=booklet_bytes,
                         file_name=f"bpsc_question_paper_series_{p_series}.pdf",
                         mime="application/pdf",
@@ -4407,12 +4545,29 @@ def show_offline_exam_simulation() -> None:
 
             with d_col3:
                 try:
+                    sol_bytes = omr_engine.generate_bpsc_solutions_paper_pdf(
+                        questions=active_qs,
+                        exam_title=p_title,
+                        series=p_series,
+                    )
+                    st.download_button(
+                        "📘 Solutions Booklet (PDF)",
+                        data=sol_bytes,
+                        file_name=f"bpsc_solutions_series_{p_series}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                except Exception as sol_err:
+                    st.error(f"Solutions Booklet Error: {sol_err}")
+
+            with d_col4:
+                try:
                     deck_bytes = anki_exporter.generate_anki_apkg_bytes(
                         questions=active_qs,
                         deck_name=f"BPSC::{p_title} (Series {p_series})",
                     )
                     st.download_button(
-                        "📦 Download Native Anki (.apkg)",
+                        "📦 Native Anki (.apkg)",
                         data=deck_bytes,
                         file_name=f"bpsc_paper_series_{p_series}.apkg",
                         mime="application/octet-stream",
@@ -4602,6 +4757,25 @@ def show_offline_exam_simulation() -> None:
                     f"{attempt_rate:.1f}%",
                     f"{eval_res['attempted']} of {eval_res['total_questions']}",
                 )
+
+                # Official Performance Transcript & Certificate PDF Download
+                try:
+                    cert_pdf = omr_engine.generate_bpsc_performance_certificate_pdf(
+                        eval_result=eval_res,
+                        candidate_roll=str(active_paper.get("roll", "710428")),
+                        exam_title=active_paper.get("title", "BPSC Combined Competitive Prelims"),
+                        series=active_paper.get("series", "A"),
+                    )
+                    st.download_button(
+                        "📜 Download Candidate Performance Transcript & Certificate (PDF)",
+                        data=cert_pdf,
+                        file_name=f"bpsc_candidate_transcript_series_{active_paper.get('series', 'A')}.pdf",
+                        mime="application/pdf",
+                        type="secondary",
+                        use_container_width=True,
+                    )
+                except Exception as cert_err:
+                    st.caption(f"Certificate notice: {cert_err}")
 
                 # AI Coaching Feedback Card
                 ai_report = st.session_state.get("omr_ai_feedback", "")
@@ -5215,13 +5389,71 @@ def show_revision_planner() -> None:
             f"**{retention['average_gain']:+0.1f}%** across {retention['retried_topics_count']} topics!"
         )
 
-    plan = revision_engine.generate_adaptive_weekly_plan(
-        stats=topic_stats,
-        attempts=attempts,
-        target_exam_date=exam_target_date,
-        daily_available_minutes=daily_minutes,
-        preferred_subjects=preferred_subj,
-    )
+    tab_fsrs_rev, tab_weekly_sched = st.tabs([
+        "🧠 FSRS Spaced Repetition Queue",
+        "📅 7-Day Strategy Schedule",
+    ])
+
+    with tab_fsrs_rev:
+        st.subheader("🧠 FSRS Scientific Spaced Repetition Memory Queue")
+        st.caption("Powered by the Free Spaced Repetition Scheduler (FSRS v6). Questions decay over time based on stability and difficulty, prioritizing review right before you forget them.")
+
+        fsrs_df = db.get_fsrs_revision_queue(limit=30)
+        if fsrs_df.empty:
+            st.info("🎉 No cards currently due for FSRS review! Keep practicing questions in Practice Mode, and they will automatically appear here as their memory retrievability decays.")
+        else:
+            fsrs_queue = fsrs_df.to_dict(orient="records")
+            q_cnt = len(fsrs_queue)
+            urgent_cnt = sum(1 for q in fsrs_queue if q.get("retrievability", 1.0) < 0.70)
+            avg_r = sum(q.get("retrievability", 1.0) for q in fsrs_queue) / max(1, q_cnt) * 100.0
+
+            fc1, fc2, fc3 = st.columns(3)
+            fc1.metric("Due for Review Today", f"{q_cnt} Questions")
+            fc2.metric("Critical Decay (<70%)", f"{urgent_cnt} Questions", delta_color="inverse")
+            fc3.metric("Queue Mean Retrievability", f"{avg_r:.1f}%")
+
+            if st.button(f"⚡ Launch FSRS Memory Drill ({q_cnt} Questions)", type="primary", use_container_width=True):
+                q_ids = [q["id"] for q in fsrs_queue]
+                df_all = db.list_questions()
+                sub_df = df_all[df_all["id"].isin(q_ids)]
+                if not sub_df.empty:
+                    st.session_state["active_test"] = {
+                        "session_id": str(uuid.uuid4())[:8],
+                        "mode": "FSRS Spaced Repetition Drill",
+                        "questions": sub_df,
+                        "answers": {},
+                        "confidences": {},
+                        "negative_rate": 0.33,
+                        "ui_style": "Interactive OMR Palette",
+                        "current_index": 0,
+                        "start_time": time.time(),
+                        "time_limit_minutes": max(10, int(len(sub_df) * 1.2)),
+                    }
+                    st.session_state["nav_selection"] = "📝 Practice & Mock Tests"
+                    st.rerun()
+
+            st.write("---")
+            for item in fsrs_queue:
+                r_pct = item.get("retrievability", 1.0) * 100.0
+                r_lbl, r_clr = fsrs_engine.get_retrievability_label(item.get("retrievability", 1.0))
+                with st.expander(f"[{r_pct:.0f}% Retrievability - {r_lbl}] Q#{item['id']} · {item['subject']} → {item['topic']}", expanded=r_pct < 65):
+                    st.markdown(f"**Question:** {item['question']}")
+                    st.caption(f"Stability: {item.get('stability', 0.0):.1f} days · Due: {str(item.get('due', ''))[:10]}")
+                    for opt in ['A', 'B', 'C', 'D']:
+                        opt_val = item.get(f'option_{opt.lower()}', '')
+                        st.markdown(f"- **{opt}.** {opt_val}")
+                    st.success(f"Correct Answer: **{item['correct_option']}**")
+                    if item.get("explanation"):
+                        st.info(f"💡 {item['explanation']}")
+
+    with tab_weekly_sched:
+        plan = revision_engine.generate_adaptive_weekly_plan(
+            stats=topic_stats,
+            attempts=attempts,
+            target_exam_date=exam_target_date,
+            daily_available_minutes=daily_minutes,
+            preferred_subjects=preferred_subj,
+        )
 
     if config.is_gemini_configured():
         ai_plan_col1, ai_plan_col2 = st.columns([3, 1])
@@ -5689,10 +5921,43 @@ def show_current_affairs() -> None:
                 created = str(nrow.get("created_at", ""))[:16]
                 with st.expander(f"📄 {ntitle} ({created})", expanded=False):
                     st.markdown(nsummary)
-                    if st.button(
-                        f"✨ Generate 3 MCQs from '{ntitle[:35]}'",
-                        key=f"vault_gen_{idx}",
-                    ):
+                    c_v1, c_v2 = st.columns(2)
+                    with c_v1:
+                        if st.button(
+                            f"✨ Generate 3 MCQs",
+                            key=f"vault_gen_{idx}",
+                            use_container_width=True,
+                        ):
+                            with st.spinner("Generating questions from saved research note..."):
+                                try:
+                                    q_set = ai_service.generate_question_set(
+                                        exam="BPSC",
+                                        subject="Current Affairs",
+                                        topic=ntitle,
+                                        subtopic="Saved Research Vault",
+                                        count=3,
+                                        difficulty="Medium",
+                                        question_type="Statement-based (1 and 2 only, etc.)",
+                                        focus="PYQ-inspired practice",
+                                        notes_or_context=nsummary,
+                                    )
+                                    st.session_state["ca_questions"] = [q.model_dump() for q in q_set.questions]
+                                    st.session_state["ca_exemplars"] = q_set.retrieved_exemplars
+                                    st.success(
+                                        "Generated 3 questions! Switch to the 'Instant Current Affairs MCQs' tab to review and save."
+                                    )
+                                except Exception as exc:
+                                    st.error(f"Generation error: {exc}")
+                    with c_v2:
+                        if st.button(f"🎙️ Listen to Briefing Podcast", key=f"vault_pod_{idx}", use_container_width=True):
+                            with st.spinner("Synthesizing audio briefing podcast..."):
+                                pod_bytes = audio_engine.generate_dossier_podcast(ntitle, nsummary)
+                                if pod_bytes:
+                                    st.audio(pod_bytes, format="audio/mp3")
+                                else:
+                                    st.warning("Audio synthesis temporarily unavailable.")
+
+                    if False:
                         with st.spinner("Generating questions from saved research note..."):
                             try:
                                 q_set = ai_service.generate_question_set(

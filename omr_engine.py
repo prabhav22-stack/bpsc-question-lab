@@ -597,3 +597,392 @@ Provide an authoritative, candid, encouraging diagnostic report formatted in Mar
         return response.text or "No diagnostic feedback generated."
     except Exception as exc:
         return f"⚠️ Diagnostic analysis generation failed: {exc}"
+
+
+# -----------------------------------------------------------------------------
+# 6. Official Solutions & Explanations Booklet PDF Compiler
+# -----------------------------------------------------------------------------
+
+def generate_bpsc_solutions_paper_pdf(
+    questions: Union[List[Dict[str, Any]], pd.DataFrame],
+    exam_title: str = "BPSC Combined Competitive Examination - Solutions & Explanations",
+    series: str = "A",
+) -> bytes:
+    """Generate an official BPSC-formatted Solutions & Explanations Booklet PDF."""
+    if not _HAS_REPORTLAB:
+        raise ImportError("reportlab is required for PDF generation. Install with 'pip install reportlab'.")
+
+    if isinstance(questions, pd.DataFrame):
+        q_list = questions.to_dict("records")
+    else:
+        q_list = list(questions)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "SolTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=13,
+        leading=16,
+        alignment=1,
+        textColor=colors.HexColor("#0f172a"),
+        spaceAfter=3,
+    )
+    subtitle_style = ParagraphStyle(
+        "SolSub",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=13,
+        alignment=1,
+        textColor=colors.HexColor("#1e40af"),
+        spaceAfter=6,
+    )
+    meta_style = ParagraphStyle(
+        "SolMeta",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11,
+        alignment=1,
+        textColor=colors.HexColor("#475569"),
+        spaceAfter=8,
+    )
+    q_stem_style = ParagraphStyle(
+        "SolQStem",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9.5,
+        leading=13,
+        textColor=colors.HexColor("#0f172a"),
+        spaceAfter=4,
+    )
+    opt_style = ParagraphStyle(
+        "SolOpt",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor("#334155"),
+    )
+    ans_style = ParagraphStyle(
+        "SolAns",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#047857"),
+        spaceBefore=3,
+        spaceAfter=2,
+    )
+    exp_style = ParagraphStyle(
+        "SolExp",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11.5,
+        textColor=colors.HexColor("#1e293b"),
+        spaceAfter=2,
+    )
+    dist_style = ParagraphStyle(
+        "SolDist",
+        parent=styles["Normal"],
+        fontName="Helvetica-Oblique",
+        fontSize=8,
+        leading=10.5,
+        textColor=colors.HexColor("#b45309"),
+        spaceAfter=2,
+    )
+
+    story = []
+    story.append(Paragraph("BIHAR PUBLIC SERVICE COMMISSION, PATNA", title_style))
+    story.append(Paragraph(f"{exam_title.upper()} · OFFICIAL SOLUTIONS", subtitle_style))
+    story.append(
+        Paragraph(
+            f"<strong>BOOKLET SERIES: {series.upper()}</strong> &nbsp;|&nbsp; "
+            f"Total Questions: <strong>{len(q_list)}</strong> &nbsp;|&nbsp; "
+            f"Official Final Answer Key & Conceptual Solutions",
+            meta_style,
+        )
+    )
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1e40af"), spaceAfter=8))
+
+    for idx, q in enumerate(q_list, start=1):
+        q_elements = []
+        stem_raw = str(q.get("question", "")).strip()
+        stem_html = f"<strong>Q.{idx}</strong> &nbsp; {stem_raw}"
+        q_elements.append(Paragraph(stem_html, q_stem_style))
+
+        corr = str(q.get("correct_option", "A")).strip().upper()
+        opt_a = str(q.get("option_a", "")).strip()
+        opt_b = str(q.get("option_b", "")).strip()
+        opt_c = str(q.get("option_c", "")).strip()
+        opt_d = str(q.get("option_d", "")).strip()
+
+        # Table of options
+        t_data = [
+            [Paragraph(f"<b>(A)</b> {opt_a}", opt_style), Paragraph(f"<b>(B)</b> {opt_b}", opt_style)],
+            [Paragraph(f"<b>(C)</b> {opt_c}", opt_style), Paragraph(f"<b>(D)</b> {opt_d}", opt_style)],
+        ]
+        t = Table(t_data, colWidths=[260, 260])
+        t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        q_elements.append(t)
+
+        # Correct Answer Box
+        corr_txt = str(q.get(f"option_{corr.lower()}", "")).strip()
+        q_elements.append(Paragraph(f"✅ <strong>Correct Option: ({corr})</strong> &mdash; <em>{corr_txt}</em>", ans_style))
+
+        # Explanation
+        exp_txt = str(q.get("explanation", "")).strip()
+        if exp_txt:
+            q_elements.append(Paragraph(f"<strong>Explanation:</strong> {exp_txt}", exp_style))
+
+        # Distractor analysis
+        dist_txt = str(q.get("distractor_notes", "")).strip()
+        if dist_txt:
+            q_elements.append(Paragraph(f"⚠️ <strong>Distractor Trap:</strong> {dist_txt}", dist_style))
+
+        # Concept tested & subject/topic
+        subj = str(q.get("subject", "")).strip()
+        topic = str(q.get("topic", "")).strip()
+        concept = str(q.get("concept_tested", "")).strip()
+        meta_info = f"📌 <em>Subject: {subj}</em>"
+        if topic:
+            meta_info += f" &nbsp;|&nbsp; <em>Topic: {topic}</em>"
+        if concept:
+            meta_info += f" &nbsp;|&nbsp; <em>Concept: {concept}</em>"
+        q_elements.append(Paragraph(meta_info, meta_style))
+
+        q_elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0"), spaceBefore=4, spaceAfter=8))
+        story.append(KeepTogether(q_elements))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+# -----------------------------------------------------------------------------
+# 7. Official Candidate Performance Transcript & Certificate
+# -----------------------------------------------------------------------------
+
+def generate_bpsc_performance_certificate_pdf(
+    eval_result: Dict[str, Any],
+    candidate_roll: str = "710428",
+    exam_title: str = "BPSC Combined Competitive Examination (Prelims)",
+    series: str = "A",
+) -> bytes:
+    """Generate an official vector PDF Performance Certificate & Transcript."""
+    if not _HAS_REPORTLAB:
+        raise ImportError("reportlab is required for PDF generation. Install with 'pip install reportlab'.")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "CertTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=15,
+        leading=18,
+        alignment=1,
+        textColor=colors.HexColor("#0f172a"),
+        spaceAfter=4,
+    )
+    sub_style = ParagraphStyle(
+        "CertSub",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=14,
+        alignment=1,
+        textColor=colors.HexColor("#1e40af"),
+        spaceAfter=4,
+    )
+    meta_style = ParagraphStyle(
+        "CertMeta",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11,
+        alignment=1,
+        textColor=colors.HexColor("#475569"),
+        spaceAfter=10,
+    )
+    cell_bold = ParagraphStyle("CBold", fontName="Helvetica-Bold", fontSize=8.5, leading=11, textColor=colors.HexColor("#0f172a"))
+    cell_norm = ParagraphStyle("CNorm", fontName="Helvetica", fontSize=8, leading=10.5, textColor=colors.HexColor("#334155"))
+
+    story = []
+    story.append(Paragraph("BIHAR PUBLIC SERVICE COMMISSION, PATNA", title_style))
+    story.append(Paragraph("OFFICIAL CANDIDATE PERFORMANCE TRANSCRIPT", sub_style))
+    story.append(Paragraph(f"{exam_title.upper()} · SERIES: {series.upper()}", meta_style))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1e40af"), spaceAfter=12))
+
+    # Candidate Meta Block Table
+    now_str = datetime.now().strftime("%d %B %Y, %I:%M %p")
+    cand_data = [
+        [Paragraph(f"<b>Candidate Roll No:</b> {candidate_roll}", cell_bold), Paragraph(f"<b>Examination Date:</b> {now_str}", cell_norm)],
+        [Paragraph(f"<b>Booklet Series:</b> {series.upper()}", cell_norm), Paragraph(f"<b>Evaluation Engine:</b> Question Lab Vector & CV OMR", cell_norm)],
+    ]
+    cand_t = Table(cand_data, colWidths=[260, 260])
+    cand_t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#cbd5e1")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(cand_t)
+    story.append(Spacer(1, 10))
+
+    # Scorecard Metrics Grid
+    tot = eval_result.get("total_questions", 0)
+    corr = eval_result.get("correct", 0)
+    inc = eval_result.get("incorrect", 0)
+    unatt = eval_result.get("unattempted", 0)
+    net = eval_result.get("net_score", 0.0)
+    acc = eval_result.get("accuracy", 0.0)
+    bleed = eval_result.get("penalty_lost", 0.0)
+    pct = (net / max(1, tot)) * 100.0
+
+    score_data = [
+        [
+            Paragraph("<b>Total Questions</b>", cell_bold),
+            Paragraph("<b>Correct (+1.00)</b>", cell_bold),
+            Paragraph("<b>Incorrect (-0.33)</b>", cell_bold),
+            Paragraph("<b>Penalty Bleed</b>", cell_bold),
+            Paragraph("<b>Unattempted</b>", cell_bold),
+            Paragraph("<b>Net Score</b>", cell_bold),
+            Paragraph("<b>Accuracy</b>", cell_bold),
+        ],
+        [
+            Paragraph(f"<b>{tot}</b>", cell_bold),
+            Paragraph(f"<font color='#047857'><b>{corr}</b></font>", cell_norm),
+            Paragraph(f"<font color='#b91c1c'><b>{inc}</b></font>", cell_norm),
+            Paragraph(f"<font color='#b91c1c'>-{bleed:.2f}</font>", cell_norm),
+            Paragraph(f"{unatt}", cell_norm),
+            Paragraph(f"<b>{net:.2f} / {tot}</b>", cell_bold),
+            Paragraph(f"<b>{acc:.1f}%</b>", cell_bold),
+        ]
+    ]
+    score_t = Table(score_data, colWidths=[74, 74, 74, 74, 74, 80, 70])
+    score_t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#ffffff")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#94a3b8")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(score_t)
+    story.append(Spacer(1, 10))
+
+    # Cutoff Status Banner
+    cutoff_color = "#047857" if pct >= 60.0 else "#b45309"
+    status_label = "QUALIFIED (Expected BPSC Prelims Cutoff Cleared)" if pct >= 60.0 else "NEEDS TARGETED REINFORCEMENT (Below 60% Benchmark)"
+    status_text = f"<font color='{cutoff_color}'><b>EXAMINATION RESULT PROGNOSIS: {status_label}</b></font><br/>Percentage Net: <b>{pct:.1f}%</b> | Standard Qualifying Benchmark: ~60.00% to 65.00% Net"
+    story.append(Paragraph(status_text, ParagraphStyle("CertStatus", fontName="Helvetica", fontSize=9, leading=13, alignment=1)))
+    story.append(Spacer(1, 10))
+
+    # Subject Breakdown Table
+    breakdown = eval_result.get("breakdown", [])
+    subj_stats: Dict[str, Dict[str, int]] = {}
+    for b in breakdown:
+        s = b.get("subject", "General")
+        st = b.get("status", "Unattempted")
+        if s not in subj_stats:
+            subj_stats[s] = {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0}
+        subj_stats[s]["total"] += 1
+        if st == "Correct":
+            subj_stats[s]["correct"] += 1
+        elif st == "Incorrect":
+            subj_stats[s]["incorrect"] += 1
+        else:
+            subj_stats[s]["unattempted"] += 1
+
+    subj_table_data = [
+        [
+            Paragraph("<b>Subject Domain</b>", cell_bold),
+            Paragraph("<b>Questions</b>", cell_bold),
+            Paragraph("<b>Correct</b>", cell_bold),
+            Paragraph("<b>Incorrect</b>", cell_bold),
+            Paragraph("<b>Skipped</b>", cell_bold),
+            Paragraph("<b>Subject Net</b>", cell_bold),
+            Paragraph("<b>Accuracy</b>", cell_bold),
+        ]
+    ]
+    for s_name, s_data in subj_stats.items():
+        s_net = s_data["correct"] - (s_data["incorrect"] * 0.33)
+        s_att = s_data["correct"] + s_data["incorrect"]
+        s_acc = (s_data["correct"] / s_att * 100.0) if s_att > 0 else 0.0
+        subj_table_data.append([
+            Paragraph(s_name, cell_bold),
+            Paragraph(str(s_data["total"]), cell_norm),
+            Paragraph(f"<font color='#047857'>{s_data['correct']}</font>", cell_norm),
+            Paragraph(f"<font color='#b91c1c'>{s_data['incorrect']}</font>", cell_norm),
+            Paragraph(str(s_data["unattempted"]), cell_norm),
+            Paragraph(f"<b>{s_net:.2f}</b>", cell_bold),
+            Paragraph(f"{s_acc:.1f}%", cell_norm),
+        ])
+
+    st_table = Table(subj_table_data, colWidths=[160, 60, 60, 60, 60, 60, 60])
+    st_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#cbd5e1")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(st_table)
+
+    story.append(Spacer(1, 14))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#94a3b8"), spaceAfter=6))
+    story.append(Paragraph("Question Lab · Official Evaluation Transcript · Retain for 7-Day Strategic Revision", meta_style))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+# -----------------------------------------------------------------------------
+# 8. Authentic 150-Question Blueprint Quotas
+# -----------------------------------------------------------------------------
+
+BPSC_150Q_BLUEPRINT = {
+    "Modern History": 30,
+    "General Science": 30,
+    "Current Affairs": 30,
+    "Bihar Special": 20,
+    "Geography": 10,
+    "Indian Polity": 10,
+    "Economy": 10,
+    "General Mental Ability & Mathematics": 10,
+}
+
